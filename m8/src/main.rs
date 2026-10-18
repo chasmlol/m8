@@ -1,10 +1,10 @@
 //! `m8`: a voice brain for an AI companion (the mate) in any game that speaks its link (link.rs).
 //!
-//! mic -> Silero VAD -> Parakeet (STT) -> the feed -> Kev (decide) -> LLM (words) -> TTS -> the game
-//! Watch and poke it at http://127.0.0.1:8090 (site.rs).
+//! mic -> Silero VAD -> speech to text -> the feed -> Kev (decide) -> LLM (words) -> TTS -> the game
+//! Each model is a server m8 calls (m8.toml); watch and poke it at http://127.0.0.1:8090 (site.rs).
 //!
-//! Usage: `m8 [m8.toml]`, `m8 [m8.toml] --self-test`
-//! or `m8 [m8.toml] --transcribe a.wav b.wav`.
+//! Usage: `m8 [m8.toml]`, `m8 [m8.toml] --transcribe a.wav b.wav`
+//! or `m8 [m8.toml] --simulate-mic a.wav b.wav` (WAVs through the mic's pipeline).
 //! While running you can also type a line into the console to "say" it without a mic.
 
 mod brain;
@@ -92,14 +92,11 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| PathBuf::from("m8.toml"));
     let cfg = Config::load(&config_path)?;
 
-    if args.iter().any(|a| a == "--self-test") {
-        return self_test(&cfg);
-    }
     if let Some(i) = args.iter().position(|a| a == "--simulate-mic") {
         // Plays WAVs through the live pipeline (48 kHz, 10 ms chunks -> resample -> VAD -> STT).
         let mut cfg = cfg.clone();
         cfg.mic.save_recordings = false;
-        let mut listener = listen::Listener::new(cfg.clone(), listen::create_recognizer(&cfg)?, 48000)?;
+        let mut listener = listen::Listener::new(cfg.clone(), listen::Transcriber::new(&cfg), 48000)?;
         for path in &args[i + 1..] {
             let wave = sherpa_onnx::Wave::read(path).ok_or_else(|| anyhow::anyhow!("can't read {path}"))?;
             let mut audio = sherpa_onnx::LinearResampler::create(wave.sample_rate(), 48000)
@@ -116,19 +113,18 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if let Some(i) = args.iter().position(|a| a == "--transcribe") {
-        let recognizer = listen::create_recognizer(&cfg)?;
+        let transcriber = listen::Transcriber::new(&cfg);
         for path in &args[i + 1..] {
             let wave = sherpa_onnx::Wave::read(path).ok_or_else(|| anyhow::anyhow!("can't read {path}"))?;
             let samples = sherpa_onnx::LinearResampler::create(wave.sample_rate(), 16000)
                 .map(|r| r.resample(wave.samples(), true))
                 .unwrap_or_else(|| wave.samples().to_vec());
-            println!("{path}: \"{}\"", listen::transcribe(&recognizer, &samples));
+            println!("{path}: \"{}\"", transcriber.transcribe(&samples)?);
         }
         return Ok(());
     }
 
-    println!("Loading speech models...");
-    let recognizer = listen::create_recognizer(&cfg)?;
+    let transcriber = listen::Transcriber::new(&cfg);
     let voice = speak::Voice::load(&cfg)?;
 
     let (inputs_tx, inputs_rx) = mpsc::channel::<brain::Input>();
@@ -154,15 +150,11 @@ fn main() -> Result<()> {
         }
     });
 
-    // Dialogue the game plays (the radio, cutscenes) is transcribed into the feed, with a
-    // recognizer of its own so that the mic's isn't held up.
+    // Dialogue the game plays (the radio, cutscenes) is transcribed into the feed, on a thread
+    // of its own so that the mic's isn't held up.
     {
-        let (cfg, inputs) = (cfg.clone(), inputs_tx.clone());
+        let (transcriber, inputs) = (transcriber.clone(), inputs_tx.clone());
         std::thread::spawn(move || {
-            let recognizer = match listen::create_recognizer(&cfg) {
-                Ok(r) => r,
-                Err(e) => return eprintln!("[hearing] no recognizer: {e:#}"),
-            };
             for (about, samples) in hearing_rx {
                 let started = Instant::now();
                 let rate = about["sample_rate"].as_i64().unwrap_or(16000) as i32;
@@ -171,7 +163,10 @@ fn main() -> Result<()> {
                     Some(r) if rate != 16000 => r.resample(&samples, true),
                     _ => samples,
                 };
-                let text = listen::transcribe(&recognizer, &samples);
+                let text = transcriber.transcribe(&samples).unwrap_or_else(|e| {
+                    eprintln!("[hearing] {e:#}");
+                    String::new()
+                });
                 if text.is_empty() {
                     continue;
                 }
@@ -227,7 +222,7 @@ fn main() -> Result<()> {
                     let _ = heard_tx.send(brain::Input::Heard(text));
                 }
             });
-            if let Err(e) = listen::run(cfg, recognizer, speaking, link, tx) {
+            if let Err(e) = listen::run(cfg, transcriber, speaking, link, tx) {
                 eprintln!("[mic] stopped: {e:#}");
             }
         });
@@ -247,59 +242,5 @@ fn main() -> Result<()> {
 
     println!("Ready! Talk to {} (or type a line here).", cfg.mate.name);
     brain::Brain::new(cfg, link, speech_tx, speaking, trace, system, combat, radio, brain_inputs).run(inputs_rx);
-    Ok(())
-}
-
-/// Loads every model and times STT and TTS without needing a mic or the game.
-fn self_test(cfg: &Config) -> Result<()> {
-    let t = Instant::now();
-    let recognizer = listen::create_recognizer(cfg)?;
-    println!("Parakeet loaded in {} ms", t.elapsed().as_millis());
-    let wav_path = cfg.models.parakeet_dir.join("test_wavs").join("0.wav");
-    let wave = sherpa_onnx::Wave::read(&config::path_str(&wav_path)).ok_or_else(|| anyhow::anyhow!("missing test wav"))?;
-    let samples = if wave.sample_rate() == 16000 {
-        wave.samples().to_vec()
-    } else {
-        sherpa_onnx::LinearResampler::create(wave.sample_rate(), 16000)
-            .unwrap()
-            .resample(wave.samples(), true)
-    };
-    for _ in 0..2 {
-        let t = Instant::now();
-        let text = listen::transcribe(&recognizer, &samples);
-        println!(
-            "STT: \"{text}\" ({:.1}s of audio in {} ms)",
-            samples.len() as f32 / 16000.0,
-            t.elapsed().as_millis()
-        );
-    }
-
-    let t = Instant::now();
-    let voice = speak::Voice::load(cfg)?;
-    println!("TTS loaded in {} ms, sample rate {}", t.elapsed().as_millis(), voice.sample_rate);
-    let texts = [
-        "Hey! Ready to go mining?",
-        "Watch out, there's a creeper right behind you, run!",
-        "Yeah, those two zombies are getting pretty annoying. Want me to distract one so you can sneak past?",
-    ];
-    for (i, text) in texts.iter().enumerate() {
-        let t = Instant::now();
-        let (mut first, mut chunks, mut pcm) = (None, 0, Vec::new());
-        voice.stream(text, "", |s| {
-            first.get_or_insert(t.elapsed().as_millis());
-            chunks += 1;
-            pcm.extend_from_slice(s);
-            true
-        })?;
-        let audio_secs = pcm.len() as f32 / voice.sample_rate as f32;
-        println!(
-            "TTS: \"{text}\" first audio {} ms, {chunks} chunks, {audio_secs:.1}s audio in {} ms",
-            first.unwrap_or(0),
-            t.elapsed().as_millis()
-        );
-        let path = std::env::temp_dir().join(format!("mate-tts-test-{i}.wav"));
-        ptts::wav::write_wav_file(&path, &pcm, voice.sample_rate)?;
-        println!("  saved {}", path.display());
-    }
     Ok(())
 }

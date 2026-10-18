@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub mate: MateConfig,
     pub mic: MicConfig,
+    pub stt: SttConfig,
     pub kev: KevConfig,
     pub llm: LlmConfig,
     pub models: ModelsConfig,
@@ -23,13 +24,11 @@ pub struct MateConfig {
     /// level's story, by the name the game gives it). The config's folder if unset.
     #[serde(default)]
     pub persona: Option<PathBuf>,
-    /// A built-in Pocket TTS voice, used when `voice_server` isn't set.
-    pub voice: String,
-    /// A cloned voice instead: the URL of a Breeze TTS 2 server (start-breeze.ps1)...
-    pub voice_server: Option<String>,
+    /// The voice: a server with Breeze TTS 2's API (speak.rs; start-breeze.ps1)...
+    pub voice_server: String,
     /// ...and the WAV it clones; its transcript is the .txt beside it.
-    pub voice_reference: Option<PathBuf>,
-    pub voice_temperature: f32,
+    pub voice_reference: PathBuf,
+    /// Its noise seed, so every line comes out in the same voice.
     pub voice_seed: u64,
 }
 
@@ -46,6 +45,15 @@ pub struct MicConfig {
     pub end_of_speech_silence: f32,
 }
 
+/// Speech to text: an OpenAI-style /v1/audio/transcriptions (listen.rs).
+#[derive(Deserialize, Clone)]
+pub struct SttConfig {
+    pub url: String,
+    /// The `model` it's sent, for servers that want one.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 #[derive(Deserialize, Clone)]
 pub struct KevConfig {
     pub url: String,
@@ -59,8 +67,8 @@ pub struct LlmConfig {
 
 #[derive(Deserialize, Clone)]
 pub struct ModelsConfig {
+    /// Silero VAD, which finds where speech starts and ends in the mic's audio.
     pub silero_vad: PathBuf,
-    pub parakeet_dir: PathBuf,
 }
 
 #[derive(Deserialize, Clone)]
@@ -76,11 +84,7 @@ impl Config {
         let mut cfg: Config = toml::from_str(&text).context("parsing config")?;
         let base = path.parent().unwrap_or(Path::new("."));
         cfg.base_dir = base.to_path_buf();
-        for p in [&mut cfg.models.silero_vad, &mut cfg.models.parakeet_dir]
-            .into_iter()
-            .chain(cfg.mate.voice_reference.as_mut())
-            .chain(cfg.mate.persona.as_mut())
-        {
+        for p in [&mut cfg.models.silero_vad, &mut cfg.mate.voice_reference].into_iter().chain(cfg.mate.persona.as_mut()) {
             if p.is_relative() {
                 *p = base.join(&*p);
             }

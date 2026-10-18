@@ -1,15 +1,12 @@
-//! Open-mic speech recognition: microphone -> Silero VAD -> Parakeet TDT.
+//! Open-mic speech recognition: microphone -> Silero VAD (here) -> a speech-to-text server.
 
 use crate::config::{path_str, Config};
 use crate::link::GameLink;
-use serde_json::json;
+use serde_json::{json, Value};
 use anyhow::{anyhow, bail, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use sherpa_onnx::{
-    LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, VadModelConfig,
-    VoiceActivityDetector,
-};
+use sherpa_onnx::{LinearResampler, VadModelConfig, VoiceActivityDetector};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
@@ -26,23 +23,65 @@ const MARGIN_AFTER: usize = SAMPLE_RATE as usize / 10;
 /// The mic audio kept for that (more than the longest piece, 20 s).
 const KEPT: usize = SAMPLE_RATE as usize * 25;
 
-pub fn create_recognizer(cfg: &Config) -> Result<OfflineRecognizer> {
-    let dir = &cfg.models.parakeet_dir;
-    let mut rc = OfflineRecognizerConfig::default();
-    rc.model_config.transducer.encoder = Some(path_str(&dir.join("encoder.int8.onnx")));
-    rc.model_config.transducer.decoder = Some(path_str(&dir.join("decoder.int8.onnx")));
-    rc.model_config.transducer.joiner = Some(path_str(&dir.join("joiner.int8.onnx")));
-    rc.model_config.tokens = Some(path_str(&dir.join("tokens.txt")));
-    rc.model_config.model_type = Some("nemo_transducer".to_string());
-    rc.model_config.num_threads = 4;
-    OfflineRecognizer::create(&rc).ok_or_else(|| anyhow!("failed to load Parakeet"))
+/// Speech to text, from a server: an OpenAI-style /v1/audio/transcriptions (a WAV in, its text
+/// out). For another kind of service, `transcribe` is the one place to change.
+#[derive(Clone)]
+pub struct Transcriber {
+    url: String,
+    model: Option<String>,
+    agent: ureq::Agent,
 }
 
-pub fn transcribe(recognizer: &OfflineRecognizer, samples: &[f32]) -> String {
-    let stream = recognizer.create_stream();
-    stream.accept_waveform(SAMPLE_RATE, samples);
-    recognizer.decode(&stream);
-    stream.get_result().map(|r| r.text.trim().to_string()).unwrap_or_default()
+impl Transcriber {
+    pub fn new(cfg: &Config) -> Self {
+        let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)).build();
+        Transcriber { url: cfg.stt.url.clone(), model: cfg.stt.model.clone(), agent }
+    }
+
+    /// What's said in 16 kHz mono audio.
+    pub fn transcribe(&self, samples: &[f32]) -> Result<String> {
+        const BOUNDARY: &str = "m8-audio-boundary";
+        let mut body = Vec::new();
+        if let Some(model) = &self.model {
+            body.extend(format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n").bytes());
+        }
+        body.extend(
+            format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\nContent-Type: audio/wav\r\n\r\n")
+                .bytes(),
+        );
+        body.extend(wav(samples, SAMPLE_RATE as u32));
+        body.extend(format!("\r\n--{BOUNDARY}--\r\n").bytes());
+        let reply: Value = self
+            .agent
+            .post(&self.url)
+            .set("Content-Type", &format!("multipart/form-data; boundary={BOUNDARY}"))
+            .send_bytes(&body)
+            .map_err(|e| anyhow!("speech-to-text at {}: {e}", self.url))?
+            .into_json()?;
+        Ok(reply["text"].as_str().unwrap_or_default().trim().to_string())
+    }
+}
+
+/// A WAV of mono audio (-1 to 1), 16-bit.
+pub fn wav(samples: &[f32], rate: u32) -> Vec<u8> {
+    let data = samples.len() as u32 * 2;
+    let mut out = Vec::with_capacity(44 + data as usize);
+    out.extend(b"RIFF");
+    out.extend((36 + data).to_le_bytes());
+    out.extend(b"WAVEfmt ");
+    out.extend(16u32.to_le_bytes());
+    out.extend(1u16.to_le_bytes());
+    out.extend(1u16.to_le_bytes());
+    out.extend(rate.to_le_bytes());
+    out.extend((rate * 2).to_le_bytes());
+    out.extend(2u16.to_le_bytes());
+    out.extend(16u16.to_le_bytes());
+    out.extend(b"data");
+    out.extend(data.to_le_bytes());
+    for s in samples {
+        out.extend(((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes());
+    }
+    out
 }
 
 fn create_vad(cfg: &Config) -> Result<VoiceActivityDetector> {
@@ -61,7 +100,7 @@ fn create_vad(cfg: &Config) -> Result<VoiceActivityDetector> {
 /// Turns raw audio at the input's sample rate into finished utterances.
 pub struct Listener {
     cfg: Config,
-    recognizer: OfflineRecognizer,
+    transcriber: Transcriber,
     vad: VoiceActivityDetector,
     resampler: Option<LinearResampler>,
     pending: Vec<f32>,
@@ -79,7 +118,7 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn new(cfg: Config, recognizer: OfflineRecognizer, input_rate: i32) -> Result<Self> {
+    pub fn new(cfg: Config, transcriber: Transcriber, input_rate: i32) -> Result<Self> {
         let recordings = cfg.mic.save_recordings.then(|| cfg.base_dir.join("recordings"));
         if let Some(dir) = &recordings {
             std::fs::create_dir_all(dir)?;
@@ -91,7 +130,7 @@ impl Listener {
                 .then(|| LinearResampler::create(input_rate, SAMPLE_RATE))
                 .flatten(),
             cfg,
-            recognizer,
+            transcriber,
             pending: Vec::new(),
             was_muted: false,
             loud_while_muted: 0,
@@ -156,7 +195,10 @@ impl Listener {
             let audio = self.with_margins(segment.start(), segment.samples());
             let audio = audio.as_slice();
             let start = Instant::now();
-            let text = transcribe(&self.recognizer, audio);
+            let text = self.transcriber.transcribe(audio).unwrap_or_else(|e| {
+                eprintln!("[stt] {e:#}");
+                String::new()
+            });
             let (peak, rms) = level_db(audio);
             println!(
                 "[stt] \"{}\" ({:.1}s audio, peak {:.0} dB, rms {:.0} dB, {} ms)",
@@ -169,7 +211,7 @@ impl Listener {
             if let Some(dir) = &self.recordings {
                 self.segment_index += 1;
                 let path = dir.join(format!("{:03}.wav", self.segment_index));
-                if let Err(e) = ptts::wav::write_wav_file(&path, audio, SAMPLE_RATE as u32) {
+                if let Err(e) = std::fs::write(&path, wav(audio, SAMPLE_RATE as u32)) {
                     eprintln!("[mic] couldn't save {}: {e}", path.display());
                 }
             }
@@ -204,7 +246,7 @@ impl Listener {
 ///
 /// With barge-in on, the mic stays live while the mate talks: as soon as the player starts
 /// speaking, the mate is cut off (queued audio in the game, pending TTS and the LLM reply).
-pub fn run(cfg: Config, recognizer: OfflineRecognizer, speaking: Speaking, link: GameLink, out: Sender<String>) -> Result<()> {
+pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, link: GameLink, out: Sender<String>) -> Result<()> {
     let host = cpal::default_host();
     let device = host.default_input_device().ok_or_else(|| anyhow!("no microphone found"))?;
     let supported = device.default_input_config()?;
@@ -223,7 +265,7 @@ pub fn run(cfg: Config, recognizer: OfflineRecognizer, speaking: Speaking, link:
 
     let (barge_in, mute_while_speaking) = (cfg.mic.barge_in, cfg.mic.mute_while_speaking);
     let name = cfg.mate.name.clone();
-    let mut listener = Listener::new(cfg, recognizer, mic_rate)?;
+    let mut listener = Listener::new(cfg, transcriber, mic_rate)?;
     for chunk in rx {
         let mate_talking = speaking.is_speaking();
         // (muted in the game: nothing heard, and he isn't cut off; the listener starts over,

@@ -7,7 +7,6 @@ description = "A voice brain for AI companions in games: it hears, decides, talk
 [dependencies]
 anyhow = "1.0"
 cpal = "0.16"
-ptts = { version = "0.4.0-rc.2", features = ["hf", "hub"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sherpa-onnx = "1.13.8"

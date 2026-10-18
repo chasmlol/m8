@@ -8,5 +8,4 @@ you have the right to use.
 - `soldier.txt`: exactly what's said in it.
 
 Set `voice_reference` in `m8.toml` to use another clip (its transcript is the `.txt` of the
-same name beside it). Without `voice_server`, m8 uses one of Pocket TTS's built-in voices
-instead (`voice`), no clip needed.
+same name beside it).

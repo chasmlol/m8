@@ -33,14 +33,22 @@ Memory: the feed keeps about 16k tokens; past that, its oldest lines are folded 
 at a quiet moment or a save. The game's saves carry the memory: loading a save brings back what
 the mate knew then.
 
-## The models: what I used, what you can plug in
+## The models are endpoints
 
-| Job | What I used | What else works |
+m8 runs no models of its own (bar Silero VAD, a 2 MB model that finds where speech starts and
+ends in the mic's audio). Each job is a server it calls, set in `m8.toml`; run them where you
+like, local or not. It speaks the APIs of what I used:
+
+| Job | API m8 calls | What I ran behind it |
 | --- | --- | --- |
-| Decide | [Kev-4B](https://huggingface.co/ggml-org/Kev-4B-GGUF) Q8, a decision model (it scores options, it doesn't write), on llama.cpp's `/v1/systemone` | Any decision model llama.cpp serves on `/v1/systemone` (`[kev] url`). It reads its whole prompt every call, so m8 gives it only the feed's newest 20 lines |
-| Talk and see | [Gemma 4 12B QAT, uncensored by HauhauCS](https://huggingface.co/HauhauCS/Gemma4-12B-QAT-Uncensored-HauhauCS-Balanced) Q4_K_M with its mmproj, on llama.cpp | Any server and model behind an OpenAI-style `/v1/chat/completions` (`[llm] url`); the server applies the model's own chat template. Seeing needs a model that takes images; without, looking just fails |
-| Speak | [Breeze TTS 2](https://huggingface.co/BreezeBlue/breeze-tts-2), cloning a voice clip, on [breeze-tts](https://github.com/breezeblue-ai/breeze-tts) in WSL | Any server with Breeze's `/v1/audio/speech` API (`voice_server`), or Pocket TTS's built-in voices with no server at all |
-| Hear | [Parakeet TDT 0.6B v2](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) int8 and Silero VAD, on sherpa-onnx inside m8 | Another NeMo transducer in sherpa-onnx's format (`parakeet_dir`) |
+| Decide | llama.cpp's `/v1/systemone` (`[kev] url`) | [Kev-4B](https://huggingface.co/ggml-org/Kev-4B-GGUF) Q8, a decision model: it scores options, it doesn't write. Its server reads its whole prompt every call, so m8 gives it only the feed's newest 20 lines |
+| Talk and see | OpenAI-style `/v1/chat/completions` (`[llm] url`), images in the messages to see | [Gemma 4 12B QAT, uncensored by HauhauCS](https://huggingface.co/HauhauCS/Gemma4-12B-QAT-Uncensored-HauhauCS-Balanced) Q4_K_M with its mmproj, on llama.cpp |
+| Speak | Breeze TTS 2's `/v1/audio/speech`, streamed (`voice_server`) | [Breeze TTS 2](https://huggingface.co/BreezeBlue/breeze-tts-2), cloning a voice clip, on [breeze-tts](https://github.com/breezeblue-ai/breeze-tts) in WSL |
+| Hear | OpenAI-style `/v1/audio/transcriptions` (`[stt] url`) | [Parakeet TDT 0.6B v2](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) int8, on `stt-server` (built with m8) |
+
+Using something else (another API, half local and half hosted): each call is in one place to
+change. Deciding is `Brain::kev` (`brain.rs`), talking `Brain::say`, seeing `Brain::look`,
+speaking `Voice::stream` (`speak.rs`) and hearing `Transcriber::transcribe` (`listen.rs`).
 
 ## Plugging in a game
 
@@ -132,7 +140,7 @@ picks the version).
    ```
 
    And from sherpa-onnx's [asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)
-   release: `silero_vad.onnx` into `models/`, and
+   release: `silero_vad.onnx` into `models/` (m8's VAD), and, for the speech-to-text server,
    `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2` unpacked into `models/`.
 
 2. Breeze, in WSL: clone breeze-tts into `~/breeze-tts`, set it up as its README says (its
@@ -145,16 +153,17 @@ picks the version).
 
 3. A voice clip and its transcript in `voices/` ([voices/README.md](voices/README.md)).
 4. Your name, as the mate calls you: one line in `player_name.txt`.
-5. Build m8:
+5. Build m8 (and `stt-server`, beside it):
 
    ```bash
    cd m8
    cargo build --release
    ```
 
-Then `start-all.ps1` starts it all, each in its own window: the decision model, the LLM, Breeze
-(its first start takes about 4 minutes), m8 once they're up, and the game if it's built in
-`halo/`. Change the scripts for your own models and game.
+Then `start-all.ps1` starts it all, each in its own window: the decision model
+(`start-kev.ps1`), the LLM (`start-chat.ps1`), Breeze (`start-breeze.ps1`; its first start takes
+about 4 minutes), speech to text (`start-stt.ps1`), m8 once they're up, and the game if it's
+built in `halo/`. Change the scripts for your own servers and game.
 
 ## Watching it
 
@@ -167,8 +176,9 @@ Then `start-all.ps1` starts it all, each in its own window: the decision model, 
 ## The code
 
 `m8/src`: `brain.rs` (the feed, decisions, the LLM, the mate's eyes, memory), `listen.rs` (the
-mic), `speak.rs` (the voice), `link.rs` (the game), `site.rs` (the pages), `picture.rs` (the
-view's numbered spots), `config.rs` (`m8.toml`).
+mic, Silero, speech to text), `speak.rs` (the voice), `link.rs` (the game), `site.rs` (the
+pages), `picture.rs` (the view's numbered spots), `config.rs` (`m8.toml`), and
+`bin/stt-server.rs` (Parakeet behind the transcriptions endpoint).
 
 ## Licence
 
