@@ -1,8 +1,8 @@
 [package]
-name = "mate"
+name = "m8"
 version = "0.1.0"
 edition = "2021"
-description = "Voice brain for an AI game mate: mic -> Parakeet -> LLM -> Pocket TTS -> game, then Kev decides"
+description = "A voice brain for AI companions in games: it hears, decides, talks, sees and speaks"
 
 [dependencies]
 anyhow = "1.0"

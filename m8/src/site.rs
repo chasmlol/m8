@@ -98,8 +98,13 @@ pub struct PromptFile {
 }
 
 impl PromptFile {
+    /// (A missing file is an empty prompt: saving one on the page makes it.)
     pub fn load(path: PathBuf) -> anyhow::Result<Self> {
-        let text = std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(anyhow::anyhow!("reading {}: {e}", path.display())),
+        };
         Ok(PromptFile { path, text: Arc::new(Mutex::new(text)) })
     }
 

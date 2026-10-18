@@ -335,7 +335,7 @@ impl Brain {
     fn context(&self) -> Vec<String> {
         let mut parts = Vec::new();
         if let Some(story) = self.state()["level"].as_str().and_then(|level| {
-            std::fs::read_to_string(self.cfg.base_dir.join("levels").join(format!("{level}.txt"))).ok()
+            std::fs::read_to_string(self.cfg.persona_dir().join("levels").join(format!("{level}.txt"))).ok()
         }) {
             parts.push(self.fill(story.trim()));
         }
@@ -360,11 +360,11 @@ impl Brain {
     fn situation(&self) -> String {
         let s = self.state();
         let mut parts = Vec::new();
-        if s["in_combat"].as_bool().unwrap_or(false) {
-            parts.push(self.fill(self.combat.get().trim()));
-        }
-        if s["on_radio"].as_bool().unwrap_or(false) {
-            parts.push(self.fill(self.radio.get().trim()));
+        for (on, prompt) in [("in_combat", &self.combat), ("on_radio", &self.radio)] {
+            let text = prompt.get();
+            if s[on].as_bool().unwrap_or(false) && !text.trim().is_empty() {
+                parts.push(self.fill(text.trim()));
+            }
         }
         parts.push(self.right_now());
         parts.join("\n")
@@ -568,7 +568,8 @@ impl Brain {
         let _ = std::fs::create_dir_all(&views);
         let _ = std::fs::write(views.join(format!("{file}.png")), &png);
 
-        let eyes = format!("You're the eyes of {name}, {player}'s teammate in Halo: Combat Evolved: you're shown what {player} is looking at.");
+        let game = self.state()["game"].as_str().unwrap_or("a game").to_string();
+        let eyes = format!("You're the eyes of {name}, {player}'s teammate in {game}: you're shown what {player} is looking at.");
         let (system, question) = if choose {
             (
                 format!("{eyes} Numbered spots are marked on the ground in it, and you pick the one {name} goes to, from what's been said."),

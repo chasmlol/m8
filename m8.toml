@@ -1,7 +1,9 @@
-# Config for the mate voice program. Paths are relative to this file.
+# m8's config. Paths are relative to this file.
 
 [mate]
 name = "Kevin"
+# The persona: its prompts and level stories (examples/kevin is Kevin, the Halo CE teammate).
+persona = "examples/kevin"
 # The system prompt (persona and all) is in system_prompt.txt, editable on the brain page.
 # Built-in Pocket TTS voice (the program lists the options if this one doesn't exist).
 voice = "alba"

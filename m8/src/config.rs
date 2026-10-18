@@ -18,6 +18,11 @@ pub struct Config {
 #[derive(Deserialize, Clone)]
 pub struct MateConfig {
     pub name: String,
+    /// The persona's folder: system_prompt.txt (who the mate is), combat_prompt.txt and
+    /// radio_prompt.txt (added while the game says so; either may be missing) and levels/ (each
+    /// level's story, by the name the game gives it). The config's folder if unset.
+    #[serde(default)]
+    pub persona: Option<PathBuf>,
     /// A built-in Pocket TTS voice, used when `voice_server` isn't set.
     pub voice: String,
     /// A cloned voice instead: the URL of a Breeze TTS 2 server (start-breeze.ps1)...
@@ -71,12 +76,23 @@ impl Config {
         let mut cfg: Config = toml::from_str(&text).context("parsing config")?;
         let base = path.parent().unwrap_or(Path::new("."));
         cfg.base_dir = base.to_path_buf();
-        for p in [&mut cfg.models.silero_vad, &mut cfg.models.parakeet_dir].into_iter().chain(cfg.mate.voice_reference.as_mut()) {
+        for p in [&mut cfg.models.silero_vad, &mut cfg.models.parakeet_dir]
+            .into_iter()
+            .chain(cfg.mate.voice_reference.as_mut())
+            .chain(cfg.mate.persona.as_mut())
+        {
             if p.is_relative() {
                 *p = base.join(&*p);
             }
         }
         Ok(cfg)
+    }
+}
+
+impl Config {
+    /// The persona's folder (`persona`), else the config's.
+    pub fn persona_dir(&self) -> PathBuf {
+        self.mate.persona.clone().unwrap_or_else(|| self.base_dir.clone())
     }
 }
 

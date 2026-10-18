@@ -1,10 +1,10 @@
-//! `mate`: the voice brain for the Agentic NPC games (Minecraft, Halo).
+//! `m8`: a voice brain for an AI companion (the mate) in any game that speaks its link (link.rs).
 //!
-//! mic -> Silero VAD -> Parakeet (STT) -> LLM (words) -> Pocket TTS -> the game, then Kev (decide)
+//! mic -> Silero VAD -> Parakeet (STT) -> the feed -> Kev (decide) -> LLM (words) -> TTS -> the game
 //! Watch and poke it at http://127.0.0.1:8090 (site.rs).
 //!
-//! Usage: `mate [config.toml]`, `mate [config.toml] --self-test`
-//! or `mate [config.toml] --transcribe a.wav b.wav`.
+//! Usage: `m8 [m8.toml]`, `m8 [m8.toml] --self-test`
+//! or `m8 [m8.toml] --transcribe a.wav b.wav`.
 //! While running you can also type a line into the console to "say" it without a mic.
 
 mod brain;
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
         .iter()
         .find(|a| !a.starts_with("--"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("mate.toml"));
+        .unwrap_or_else(|| PathBuf::from("m8.toml"));
     let cfg = Config::load(&config_path)?;
 
     if args.iter().any(|a| a == "--self-test") {
@@ -189,9 +189,13 @@ fn main() -> Result<()> {
     }
 
     let trace = site::Trace::new(&cfg.base_dir.join("logs"));
-    let system = site::PromptFile::load(cfg.base_dir.join("system_prompt.txt"))?;
-    let combat = site::PromptFile::load(cfg.base_dir.join("combat_prompt.txt"))?;
-    let radio = site::PromptFile::load(cfg.base_dir.join("radio_prompt.txt"))?;
+    let persona = cfg.persona_dir();
+    let system = site::PromptFile::load(persona.join("system_prompt.txt"))?;
+    if system.get().trim().is_empty() {
+        anyhow::bail!("no system prompt in {} (the persona's folder: `persona` in the config)", persona.display());
+    }
+    let combat = site::PromptFile::load(persona.join("combat_prompt.txt"))?;
+    let radio = site::PromptFile::load(persona.join("radio_prompt.txt"))?;
     {
         let (trace, system, combat, radio, link, inputs) =
             (trace.clone(), system.clone(), combat.clone(), radio.clone(), link.clone(), inputs_tx.clone());

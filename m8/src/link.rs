@@ -1,4 +1,4 @@
-//! TCP link to the game (the Minecraft mod, or the Halo port). We listen on localhost; the mod connects and reconnects.
+//! TCP link to the game (a mod, or a port of it). We listen on localhost; the game connects and reconnects.
 //!
 //! Frames are `[u8 kind][u32 big-endian length][payload]`. Kind 1 is a JSON object,
 //! kind 2 is raw mono 16-bit little-endian PCM of the mate's voice. Kind 3, from the game, is
