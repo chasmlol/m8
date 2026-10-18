@@ -11,8 +11,9 @@ can open a socket, plug in the models you like, write a persona.
 > bend to their own game and models. It runs on Windows with an NVIDIA GPU, starts with
 > PowerShell scripts, and expects you to read the code.
 
-The example it was built with is **Kevin**, a Spartan teammate in a port of Halo: Combat Evolved
-([examples/kevin](examples/kevin)). The game side of that isn't in this repo.
+**Supported game: Halo: Combat Evolved**, as a mod of [OpenCE](https://github.com/OpenCommunityEdition/OpenCE),
+the port of the Xbox game ([games/halo](games/halo)). More games can be added the same way. The persona that comes
+with it is **Kevin**, a Spartan ([examples/kevin](examples/kevin)).
 
 ## How a turn goes
 
@@ -80,6 +81,33 @@ Also from the game: `event` (`text`, and `react`: false to only note it), `saved
 (`speech_cooldown`). From m8: `hello`, `say` (a line as it starts), `heard` (what you said),
 `view` (send the view), `stop_audio`, `audio_end`.
 
+## Playing it in Halo
+
+The mod is m8's changes to OpenCE ([games/halo](games/halo)); you bring the models (Setup,
+below) and your own copy of the game.
+
+1. Get the game and put the mod on it: `games/halo/setup.ps1` clones OpenCE into `halo/` and
+   applies the changes.
+2. Build it, on Windows, in `halo/` (Python, [ninja](https://ninja-build.org/) and LLVM with
+   clang 22 or later):
+
+   ```bash
+   python configure.py --release
+   ninja windows
+   ```
+
+   That makes `halo/build/windows/halo.exe`.
+3. The game data: start `halo.exe` once and give it an Xbox disc image of Halo: Combat Evolved,
+   as OpenCE's README ("Game data") says; it extracts the maps.
+4. Set up m8 (Setup, below), then run `start-all.ps1`: it starts the models, m8 and the game,
+   which connects to m8 by itself.
+5. In a campaign level the teammate appears beside you. Talk to him; **M** mutes the mic
+   (an icon shows it); typing `kevin <text>` in the game's console gives him a line as a game
+   master; **KEVIN SETUP** on the profile menu sets his speech cooldown, his volume beside you
+   and over the radio, and how far off he goes to the radio.
+
+What the mod changes: [games/halo/README.md](games/halo/README.md).
+
 ## A persona
 
 A persona is a folder (`persona` in `m8.toml`; `name` is what the mate is called):
@@ -125,7 +153,7 @@ picks the version).
    ```
 
 Then `start-all.ps1` starts it all, each in its own window: the decision model, the LLM, Breeze
-(its first start takes about 4 minutes), m8 once they're up, and a game if one is built in
+(its first start takes about 4 minutes), m8 once they're up, and the game if it's built in
 `halo/`. Change the scripts for your own models and game.
 
 ## Watching it
