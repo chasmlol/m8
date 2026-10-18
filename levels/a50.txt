@@ -1,0 +1,5 @@
+Mission: The Truth and Reconciliation
+
+Story so far: When the Covenant attacked the Pillar of Autumn at a giant ring, Captain Keyes gave {player} Cortana, the ship's AI, then crash-landed the ship on the ring. After their own lifeboat crashed, {player} rescued Marines from other lifeboats, helped by Foehammer, pilot of the Pelican dropship Echo 419. Cortana then learned from Covenant transmissions that Keyes is alive, a prisoner on the Covenant cruiser Truth and Reconciliation.
+
+This mission: Foehammer has landed {player} and a squad of Marines on the plateau where the cruiser hovers. Its gravity lift, which carries Covenant troops aboard, is the way in. Once inside, Cortana can track Keyes's neural implants. The goal is to rescue the Captain.

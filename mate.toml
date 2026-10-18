@@ -1,0 +1,41 @@
+# Config for the mate voice program. Paths are relative to this file.
+
+[mate]
+name = "Kevin"
+# The system prompt (persona and all) is in system_prompt.txt, editable on the brain page.
+# Built-in Pocket TTS voice (the program lists the options if this one doesn't exist).
+voice = "alba"
+# Or a cloned voice from Breeze TTS 2 (start-breeze.ps1), cloning this WAV (its transcript is
+# the .txt beside it), told how to say each line:
+voice_server = "http://127.0.0.1:7860"
+voice_reference = "voices/soldier.wav"
+# (Built-in voice only) lower = steadier delivery, higher = more expressive but less consistent.
+voice_temperature = 0.6
+# Fixed noise seed, so every line comes out in the same voice.
+voice_seed = 42
+
+[mic]
+# Talk over the mate to cut it off (use headphones, or it can hear itself through speakers).
+barge_in = true
+# Only used when barge_in = false: ignore the mic entirely while the mate is talking.
+mute_while_speaking = true
+# Silero VAD sensitivity (0-1, higher = needs clearer speech).
+vad_threshold = 0.5
+# How long you must pause before your sentence counts as finished.
+end_of_speech_silence = 0.1
+# Save every clip it hears to recordings/ (for debugging recognition).
+save_recordings = false
+
+[kev]
+url = "http://127.0.0.1:8080/v1/systemone"
+
+[llm]
+url = "http://127.0.0.1:8081/v1/chat/completions"
+temperature = 1.0
+
+[models]
+silero_vad = "models/silero_vad.onnx"
+parakeet_dir = "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+
+[game]
+port = 47800

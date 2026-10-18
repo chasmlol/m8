@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mate Brain</title>
+<style>
+  :root { --bg: #111; --panel: #1b1b1b; --line: #2c2c2c; --text: #ddd; --dim: #888; --you: #7cc4ff; --mate: #ff8a7a; --event: #e6c35c; --act: #8fdc8f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  main { display: grid; grid-template-columns: 360px 1fr 1fr; gap: 12px; padding: 12px; height: 100vh; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; min-height: 0; }
+  h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .scroll { overflow: auto; flex: 1; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.45 ui-monospace, Consolas, monospace; }
+  input, textarea, button { font: inherit; color: var(--text); background: #222; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { width: 100%; font: 12px ui-monospace, Consolas, monospace; flex: 1; min-height: 160px; }
+  button { cursor: pointer; } button:hover { border-color: #555; }
+  .row { display: flex; gap: 6px; margin-bottom: 10px; } .row input { flex: 1; }
+  .events { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .entry { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .heard { color: var(--you); } .llm { color: var(--mate); } .event { color: var(--event); } .action { color: var(--act); }
+  .kev { color: var(--dim); font-size: 12.5px; }
+  .kev b { color: var(--text); font-weight: 600; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; height: auto; } section { max-height: 70vh; } }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h2>Talk</h2>
+    <div class="row"><input id="say" placeholder="Say something to the mate"><button onclick="say()">Say</button></div>
+    <h2>Game events</h2>
+    <div class="events" id="events"></div>
+    <div class="row"><input id="event" placeholder="Custom event"><button onclick="sendEvent(byId('event').value)">Send</button></div>
+    <div class="row"><input id="saveId" placeholder="Save id" value="test"><button onclick="post('/save', byId('saveId').value)">Save</button><button onclick="post('/load', byId('saveId').value)">Load</button></div>
+    <h2>Game state <span style="text-transform:none">(stands in for the game)</span></h2>
+    <textarea id="state"></textarea>
+    <div class="row" style="margin-top:6px"><button onclick="setState()">Use this state</button><span id="stateMsg" style="color:var(--dim)"></span></div>
+  </section>
+  <section>
+    <h2>System prompt <span style="text-transform:none">({game} and {player} come from the game)</span></h2>
+    <textarea id="system" style="flex:none;min-height:130px"></textarea>
+    <div class="row" style="margin-top:6px"><span id="systemMsg" style="color:var(--dim)">saves as you type</span></div>
+    <h2>Combat prompt <span style="text-transform:none">(added while the game says he's in combat)</span></h2>
+    <textarea id="combat" style="flex:none;min-height:70px"></textarea>
+    <div class="row" style="margin-top:6px"><span id="combatMsg" style="color:var(--dim)">saves as you type</span></div>
+    <h2>Radio prompt <span style="text-transform:none">(added while the game says he's on the radio)</span></h2>
+    <textarea id="radio" style="flex:none;min-height:50px"></textarea>
+    <div class="row" style="margin-top:6px"><span id="radioMsg" style="color:var(--dim)">saves as you type</span></div>
+    <h2>Prompt (the LLM's turns; Kev gets the same as one block)</h2>
+    <div class="scroll"><pre id="prompt"></pre></div>
+  </section>
+  <section>
+    <h2>What happened <a href="/history" style="float:right;text-transform:none;color:var(--you)">History: everything in and out →</a></h2>
+    <div class="scroll" id="log"></div>
+  </section>
+</main>
+<script>
+const EVENTS = [
+  "Enemies came into view: a grunt ahead, an elite ahead.", "Kevin killed a grunt.", "{player} killed an elite.",
+  "Kevin's shields broke.", "Kevin is badly hurt.", "{player} shot Kevin.", "{player} picked up a shotgun.",
+  "It's been quiet for a while.", "Cortana over the radio: \"Chief, I'm picking up a distress beacon.\"",
+  "New objective: Find the survivors.", "{player} died.",
+];
+const EXAMPLE_STATE = {
+  game: "Halo: Combat Evolved",
+  player_name: "Chief",
+  level: "a30",
+  in_combat: true,
+  state: "Kevin: unhurt, shields full, holding an assault rifle (52 rounds loaded, spare ammo), a pistol on his back (12 rounds loaded, spare ammo), 2 frag and 0 plasma grenades, following {player}. {player}: close by ahead, unhurt, shields full. Enemies: elite close (9 m) ahead, in sight, unhurt, shields full; grunt at mid range (16 m) to the left, in sight, unhurt.",
+  actions: [
+    { name: "stay", description: "stays where he is" },
+    { name: "shoot", description: "shoots at an enemy", options: { "1": "elite close (9 m) ahead, in sight, unhurt, shields full", "2": "grunt at mid range (16 m) to the left, in sight, unhurt" } },
+    { name: "rush", description: "rushes an enemy", options: { "1": "elite close (9 m) ahead, in sight, unhurt, shields full", "2": "grunt at mid range (16 m) to the left, in sight, unhurt" } },
+    { name: "cover", description: "takes cover" },
+    { name: "fall_back", description: "falls back" },
+    { name: "frag_grenade", description: "throws a frag grenade", options: { "1": "elite close (9 m) ahead", "2": "grunt at mid range (16 m) to the left" } },
+    { name: "switch_weapon", description: "switches to his pistol" },
+    { name: "crouch", description: "crouches" },
+  ],
+};
+const byId = id => document.getElementById(id);
+const post = (path, body) => fetch(path, { method: "POST", body });
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+for (const text of EVENTS) {
+  const b = document.createElement("button");
+  b.textContent = text;
+  b.onclick = () => sendEvent(text);
+  byId("events").append(b);
+}
+function say() { const t = byId("say").value.trim(); if (t) { post("/say", t); byId("say").value = ""; } }
+function sendEvent(t) { if (t.trim()) post("/event", t.trim()); }
+async function setState() {
+  const r = await post("/state", byId("state").value);
+  byId("stateMsg").textContent = r.ok ? " set" : " " + await r.text();
+}
+// a prompt box: loaded from the brain, saved back as you type
+function promptBox(id) {
+  let timer;
+  const save = async () => {
+    const r = await post("/" + id, byId(id).value);
+    byId(id + "Msg").textContent = r.ok ? " saved" : " " + await r.text();
+  };
+  fetch("/" + id).then(r => r.text()).then(t => byId(id).value = t);
+  byId(id).oninput = () => { byId(id + "Msg").textContent = " ..."; clearTimeout(timer); timer = setTimeout(save, 400); };
+}
+promptBox("system");
+promptBox("combat");
+promptBox("radio");
+byId("say").onkeydown = e => { if (e.key === "Enter") say(); };
+byId("event").onkeydown = e => { if (e.key === "Enter") sendEvent(byId("event").value); };
+
+// (one line each; /history has all of an entry)
+function render(e) {
+  const d = e.data;
+  if (e.kind === "heard") return `<div class="heard">You: ${esc(d.text)}</div>`;
+  if (e.kind === "llm") return `<div class="llm">Mate: ${esc(d.line)}</div>`;
+  if (e.kind === "event") return `<div class="event">Event: ${esc(d.text)}</div>`;
+  if (e.kind === "memory") return `<div class="kev">Memory summarised: ${esc(d.summary)}</div>`;
+  if (e.kind === "kev") {
+    const speak = (d.calls || []).map(c => c.response?.answers?.speak?.noul).find(v => v != null);
+    return `<div class="kev">Kev (${d.ms} ms): <b>${esc(d.action)}${d.option ? " → " + esc(d.option) : ""}</b>${
+      d.cooldown ? " · cooldown" : d.speak_asked === false ? " · answers" : d.speak === null || d.speak === undefined ? "" :
+      ` · speak <b>${d.speak ? (d.waiting ? "yes (too soon)" : "yes") : "no"}</b> (${(speak ?? 0).toFixed(2)})`}</div>`;
+  }
+  return null;
+}
+
+let next = 0, stateFilled = false;
+async function poll() {
+  try {
+    const t = await (await fetch("/trace?since=" + next)).json();
+    byId("prompt").textContent = t.prompt || "(nothing yet)";
+    if (!stateFilled) {
+      byId("state").value = JSON.stringify(t.state && t.state.actions ? t.state : EXAMPLE_STATE, null, 2);
+      stateFilled = true;
+    }
+    const log = byId("log");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    for (const e of t.entries) {
+      const html = render(e);
+      if (html) log.insertAdjacentHTML("beforeend", `<a class="entry" style="display:block;text-decoration:none" href="/history#${e.id}">${html}</a>`);
+    }
+    next = t.next;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  } catch {}
+  setTimeout(poll, 500);
+}
+poll();
+</script>
+</body>
+</html>

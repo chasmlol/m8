@@ -1,0 +1,3 @@
+# sherpa-onnx's prebuilt Windows static libs use the static CRT (/MT), so we must too.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

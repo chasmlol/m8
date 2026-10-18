@@ -1,0 +1,22 @@
+# Only what's listed here goes in the repo. Everything else stays on this machine: the models,
+# llama.cpp, build output, the game, your voice clip, recordings, logs and Kevin's memory.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/mate.toml
+!/system_prompt.txt
+!/combat_prompt.txt
+!/radio_prompt.txt
+!/start-all.ps1
+!/start-kev.ps1
+!/start-chat.ps1
+!/start-breeze.ps1
+!/levels/
+!/patches/
+!/voices/
+/voices/*
+!/voices/README.md
+!/mate/
+/mate/target/

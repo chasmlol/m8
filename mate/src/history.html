@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mate History</title>
+<style>
+  :root {
+    --bg: #111; --panel: #1b1b1b; --panel2: #222; --line: #2c2c2c; --text: #ddd; --dim: #888;
+    --you: #7cc4ff; --mate: #ff8a7a; --event: #e6c35c; --kev: #b9a3f0; --voice: #7fd1c4; --mem: #aaa; --act: #8fdc8f; --sight: #f0a3d0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; }
+  a { color: var(--you); }
+  select, input, button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  button { cursor: pointer; } button:hover { border-color: #555; }
+  .chip.on { border-color: var(--text); background: #333; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, 38%) 1fr; }
+  #list { overflow: auto; border-right: 1px solid var(--line); }
+  .row { display: grid; grid-template-columns: 62px 66px 1fr auto; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: baseline; }
+  .row:hover { background: #171717; }
+  .row.sel { background: #262626; }
+  .when { color: var(--dim); font: 12px ui-monospace, Consolas, monospace; }
+  .tag { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .sum { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ms { color: var(--dim); font-size: 12px; }
+  .k-heard { color: var(--you); } .k-llm { color: var(--mate); } .k-event { color: var(--event); }
+  .k-kev { color: var(--kev); } .k-voice { color: var(--voice); } .k-summary, .k-memory { color: var(--mem); } .k-sight { color: var(--sight); }
+  .view { max-width: 100%; border-radius: 6px; margin-top: 6px; display: block; }
+  #detail { overflow: auto; padding: 14px 18px 40px; }
+  #detail h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin: 18px 0 6px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--dim); font-size: 13px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 ui-monospace, Consolas, monospace; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 6px 0; }
+  .turn { border-left: 3px solid var(--line); }
+  .turn.system { border-left-color: var(--kev); } .turn.user { border-left-color: var(--you); } .turn.assistant { border-left-color: var(--mate); }
+  .role { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+  .said { font-size: 15px; color: var(--mate); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.chosen td { background: #2a2540; }
+  .bar { height: 8px; background: var(--kev); border-radius: 4px; min-width: 1px; }
+  .barcell { width: 32%; }
+  .num { text-align: right; font: 12px ui-monospace, Consolas, monospace; white-space: nowrap; }
+  details > summary { cursor: pointer; color: var(--dim); margin: 6px 0; }
+  .empty { color: var(--dim); padding: 30px; }
+  .yes { color: var(--act); } .no { color: var(--dim); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #list { max-height: 45vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mate history</h1>
+  <select id="session" title="Session"></select>
+  <span id="filters"></span>
+  <input id="search" placeholder="Search" size="18">
+  <label class="ms"><input type="checkbox" id="follow" checked> follow live</label>
+  <span style="flex:1"></span>
+  <a href="/">Brain page</a>
+</header>
+<main>
+  <div id="list"></div>
+  <div id="detail"><div class="empty">Click an entry to see exactly what went in and what came out.</div></div>
+</main>
+<script>
+const byId = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const NAMES = { heard: "You", event: "Event", kev: "Kev", llm: "LLM", voice: "Voice", summary: "Summary", memory: "Memory", sight: "Sight" };
+const FILTERS = [["all", "All"], ["kev", "Kev"], ["llm", "LLM"], ["sight", "Sight"], ["event", "Events"], ["heard", "You"], ["voice", "Voice"], ["summary", "Memory"]];
+
+let entries = [], selectedId = null, live = null, viewing = null, next = 0, filter = "all", started = 0;
+
+// ---------- the timeline
+
+const text = d => typeof d === "string" ? d : (d?.text ?? "");
+function speakScore(d) {
+  return (d.calls || []).map(c => c.response?.answers?.speak?.noul).find(v => v != null);
+}
+function summary(e) {
+  const d = e.data;
+  switch (e.kind) {
+    case "heard": return text(d);
+    case "event": return text(d);
+    case "kev": {
+      let s = d.action + (d.option ? ` → ${d.option}` : "");
+      if (d.then?.action) s += ` · then ${d.then.action}${d.then.option ? ` → ${d.then.option}` : ""}`;
+      if (d.cooldown) s += " · cooldown: not asked to speak";
+      else if (d.speak_asked === false) s += " · answers (your line)";
+      else if (d.speak !== null && d.speak !== undefined) s += ` · speak ${d.speak ? (d.waiting ? "yes, too soon: let go" : "yes") : "no"} (${(speakScore(d) ?? 0).toFixed(2)})`;
+      return s;
+    }
+    case "llm": return d.line ?? text(d);
+    case "voice": return `"${d.text}"` + (d.first_audio_ms != null ? ` · first audio ${d.first_audio_ms} ms` : "") + (d.error ? " · FAILED" : "");
+    case "summary": return d.output ?? d.error ?? "";
+    case "memory": return `folded ${d.folded} lines into the summary`;
+    case "sight": return `${d.kind}: ${d.seen ?? d.error ?? ""}`;
+  }
+  return JSON.stringify(d);
+}
+const ms = e => e.data?.ms != null ? `${e.data.ms} ms` : "";
+function when(e) {
+  const s = Math.max(0, Math.round((e.t - started) / 1000));
+  return `+${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function shown(e) {
+  if (filter !== "all" && e.kind !== filter && !(filter === "summary" && e.kind === "memory")) return false;
+  const q = byId("search").value.trim().toLowerCase();
+  return !q || JSON.stringify(e.data).toLowerCase().includes(q);
+}
+function rowHtml(e) {
+  return `<div class="row${e.id === selectedId ? " sel" : ""}" data-id="${e.id}" title="${esc(new Date(e.t).toLocaleTimeString())}">
+    <span class="when">${when(e)}</span><span class="tag k-${e.kind}">${NAMES[e.kind] || e.kind}</span>
+    <span class="sum k-${e.kind === "kev" || e.kind === "voice" ? "" : e.kind}">${esc(summary(e))}</span><span class="ms">${ms(e)}</span></div>`;
+}
+function renderList() {
+  byId("list").innerHTML = entries.filter(shown).slice().reverse().map(rowHtml).join("") ||
+    `<div class="empty">Nothing ${filter === "all" ? "yet" : "of that kind"}.</div>`;
+}
+byId("list").onclick = ev => {
+  const row = ev.target.closest(".row");
+  if (row) select(Number(row.dataset.id));
+};
+function select(id) {
+  selectedId = id;
+  for (const r of byId("list").querySelectorAll(".row")) r.classList.toggle("sel", Number(r.dataset.id) === id);
+  const e = entries.find(x => x.id === id);
+  byId("detail").innerHTML = e ? detail(e) : "";
+  byId("detail").scrollTop = 0;
+}
+document.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT" || !["ArrowUp", "ArrowDown"].includes(ev.key)) return;
+  const rows = [...byId("list").querySelectorAll(".row")];
+  const at = rows.findIndex(r => r.classList.contains("sel"));
+  const to = rows[Math.min(rows.length - 1, Math.max(0, at + (ev.key === "ArrowDown" ? 1 : -1)))];
+  if (to) { select(Number(to.dataset.id)); to.scrollIntoView({ block: "nearest" }); ev.preventDefault(); }
+});
+
+// ---------- an entry, all of it
+
+const box = (inner, cls = "") => `<div class="box ${cls}">${inner}</div>`;
+const pre = s => `<pre>${esc(s)}</pre>`;
+const raw = (label, v) => `<details><summary>${label}</summary>${box(pre(JSON.stringify(v, null, 2)))}</details>`;
+
+function detail(e) {
+  const d = e.data;
+  let h = `<div class="meta"><span class="tag k-${e.kind}" style="font-size:13px">${NAMES[e.kind] || e.kind}</span>
+    <span>${esc(new Date(e.t).toLocaleTimeString())} (${when(e)})</span><span>#${e.id}</span>
+    <button onclick="copyEntry(${e.id})">Copy JSON</button></div>`;
+  if (typeof d === "string") return h + box(pre(d));
+  switch (e.kind) {
+    case "llm": return h + llm(d);
+    case "kev": return h + kev(d);
+    case "event": return h + event(d);
+    case "heard": return h + `<h2>Heard (from the mic)</h2>` + box(`<div style="color:var(--you);font-size:15px">${esc(d.text)}</div>`);
+    case "voice": return h + voice(d);
+    case "summary": return h + summaryCall(d);
+    case "memory": return h + `<h2>New memory summary (${d.folded} oldest lines folded in)</h2>` + box(pre(d.summary));
+    case "sight": return h + sight(d);
+  }
+  return h + raw("Data", d);
+}
+
+// (a turn's content: its text, or its parts: text, and pictures)
+const content = c => Array.isArray(c) ? c.map(part => part.type === "image_url" ?
+  `<img class="view" src="${esc(part.image_url?.url)}">` : pre(part.text ?? JSON.stringify(part))).join("") : pre(c);
+function turns(messages) {
+  return (messages || []).map(m => box(`<div class="role k-${m.role === "assistant" ? "llm" : m.role === "user" ? "heard" : "kev"}">${esc(m.role)}</div>${content(m.content)}`, `turn ${m.role}`)).join("");
+}
+
+function sight(d) {
+  const req = d.request || {};
+  let h = `<div class="meta" style="margin-top:8px"><span><b>${d.kind === "choose" ? "which spot he goes to" : "what's there"}</b></span>
+    ${d.spots != null ? `<span>${d.spots} spots marked</span>` : ""}${d.ms != null ? `<span>total <b>${d.ms} ms</b></span>` : ""}</div>`;
+  h += `<h2>What he made of it (in the feed)</h2>` + box(`<div style="color:var(--sight);font-size:15px">${esc(d.seen ?? d.error)}</div>`);
+  if (d.picture) h += `<h2>The view the LLM saw</h2>` + box(`<img class="view" src="/view?name=${esc(d.picture)}">`);
+  if (d.output != null) h += `<h2>Raw output</h2>` + box(pre(d.output));
+  if (req.messages) h += `<h2>Input: ${req.messages.length} turns, as sent to ${esc(d.url)}</h2>` + turns(req.messages);
+  return h + raw("Request JSON", req);
+}
+
+function llm(d) {
+  const req = d.request || {};
+  let h = `<div class="meta" style="margin-top:8px">
+    <span>model <b>${esc(d.model || "?")}</b></span><span>temperature <b>${esc(req.temperature)}</b></span>
+    <span>first words <b>${d.first_token_ms ?? "?"} ms</b></span><span>total <b>${d.ms} ms</b></span>
+    ${d.cut_off ? `<span style="color:var(--mate)">cut off (talked over)</span>` : ""}</div>`;
+  const directions = d.directions || (d.how ? [d.how] : []);
+  h += `<h2>What he said</h2>` + box(`<div class="said" style="white-space:pre-wrap">${esc(d.line)}</div><div class="meta" style="margin-top:4px">voice directions, each for what follows it: <b>${
+    directions.length ? directions.map(esc).join(" → ") : "(none)"}</b></div>`);
+  h += `<h2>Raw output (exactly as the model wrote it)</h2>` + box(pre(d.output));
+  h += `<h2>Input: ${(req.messages || []).length} turns, as sent to ${esc(d.url)}</h2>` + turns(req.messages);
+  return h + raw("Request JSON", req);
+}
+
+function question(key, q, answer) {
+  let h = `<div style="margin:6px 0 4px"><b>${esc(key)}</b> <span class="ms">(${esc(q.type)})</span> ${esc(q.instructions)}</div>`;
+  if (!answer) return h + `<div class="ms">no answer</div>`;
+  if (q.type === "noul") {
+    const v = answer.noul ?? 0;
+    return h + `<table><tr class="chosen"><td style="width:70px" class="${v >= 0.5 ? "yes" : "no"}"><b>${v >= 0.5 ? "YES" : "NO"}</b></td>
+      <td class="barcell"><div class="bar" style="width:${(v * 100).toFixed(1)}%"></div></td><td class="num">${v.toFixed(3)}</td></tr></table>`;
+  }
+  const probs = answer.probabilities || {};
+  const rows = Object.entries(probs).sort((a, b) => b[1] - a[1]).map(([k, p]) =>
+    `<tr class="${k === answer.choice ? "chosen" : ""}"><td style="width:110px">${k === answer.choice ? "▶ " : ""}<b>${esc(k)}</b></td>
+     <td>${esc(q.criteria?.[k] ?? "")}</td><td class="barcell"><div class="bar" style="width:${(p * 100).toFixed(1)}%"></div></td>
+     <td class="num">${p.toFixed(3)}</td></tr>`).join("");
+  return h + `<table>${rows}</table><div class="ms" style="margin-top:4px">chose <b>${esc(answer.choice)}</b>${answer.confidence != null ? `, confidence ${answer.confidence.toFixed(3)}` : ""}</div>`;
+}
+
+function kev(d) {
+  let h = `<div class="meta" style="margin-top:8px"><span>decided <b>${esc(d.action)}${d.option ? " → " + esc(d.option) : ""}</b></span>
+    ${d.then?.action ? `<span>then <b>${esc(d.then.action)}${d.then.option ? " → " + esc(d.then.option) : ""}</b></span>` : ""}
+    ${d.seen?.what ? `<span>saw <b>${esc(d.seen.what)}</b></span>` : ""}
+    <span>${d.sent ? "sent to the game" : "nothing sent"}</span>
+    ${d.cooldown ? `<span>speak: <b class="no">not asked (cooldown: talking, or just stopped)</b></span>` :
+      d.speak_asked === false ? `<span>speak: <b class="yes">always (your line)</b></span>` : d.speak === null || d.speak === undefined ? "" :
+      `<span>speak: <b class="${d.speak && !d.waiting ? "yes" : "no"}">${d.speak ? (d.waiting ? "yes, but too soon after his last line: let go" : "yes") : "no"}</b></span>`}
+    <span>total <b>${d.ms} ms</b></span><span>${(d.calls || []).length} call(s)</span></div>`;
+  (d.calls || []).forEach((c, i) => {
+    const req = c.request || {}, answers = c.response?.answers || {};
+    h += `<h2>Call ${i + 1}: ${esc(c.purpose)} · ${c.ms} ms</h2>`;
+    h += box(Object.entries(req.questions || {}).map(([k, q]) => question(k, q, answers[k])).join("<hr style='border:0;border-top:1px solid var(--line)'>"));
+    const same = i > 0 && d.calls.slice(0, i).find(p => p.request?.state === req.state);
+    h += same ? `<div class="ms">Read the same input as call ${d.calls.indexOf(same) + 1}.</div>`
+      : `<details ${i === 0 ? "open" : ""}><summary>What Kev read (its whole input)</summary>${box(pre(req.state))}</details>`;
+    h += raw("Request and response JSON", { url: c.url, request: req, response: c.response });
+  });
+  return h;
+}
+
+function event(d) {
+  let h = `<h2>The game said</h2>` + box(`<div style="color:var(--event);font-size:15px">${esc(d.text)}</div>
+    ${d.react === false ? `<div class="ms">(heard only: no decision)</div>` : ""}`);
+  const s = d.state;
+  if (s && typeof s === "object") {
+    h += `<h2>The game's state then</h2><div class="meta"><span>level <b>${esc(s.level)}</b></span>
+      <span>in combat <b>${esc(s.in_combat)}</b></span><span>on the radio <b>${esc(s.on_radio)}</b></span></div>`;
+    h += box(pre(s.state));
+    h += `<h2>Actions he could take</h2>` + box((s.actions || []).map(a => `<div><b>${esc(a.name)}</b>: ${esc(a.description)}${
+      a.options ? `<div class="ms" style="margin-left:14px">${Object.entries(a.options).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>")}</div>` : ""}</div>`).join("") || "(none)");
+    h += raw("State JSON", s);
+  }
+  return h;
+}
+
+function voice(d) {
+  return `<h2>Spoken (one sentence)</h2>` + box(`<div class="said" style="color:var(--voice)">${esc(d.text)}</div>`) +
+    `<div class="meta"><span>direction <b>${esc(d.how || "(none)")}</b></span><span>first audio <b>${d.first_audio_ms ?? "?"} ms</b></span>
+    <span>total <b>${d.ms} ms</b></span>${d.cut_off ? "<span>cut off</span>" : ""}${d.error ? `<span style="color:var(--mate)">error: ${esc(d.error)}</span>` : ""}</div>`;
+}
+
+function summaryCall(d) {
+  return `<div class="meta" style="margin-top:8px"><span>model <b>${esc(d.settings?.model || "?")}</b></span>
+    <span>temperature <b>${esc(d.settings?.temperature)}</b></span><span>total <b>${d.ms} ms</b></span></div>` +
+    `<h2>Output</h2>` + box(pre(d.output ?? d.error)) + `<h2>Input</h2>` + turns(d.messages);
+}
+
+function copyEntry(id) {
+  const e = entries.find(x => x.id === id);
+  navigator.clipboard?.writeText(JSON.stringify(e, null, 2));
+}
+
+// ---------- sessions: the live one, followed; a past one, read from its log
+
+async function loadSessions() {
+  const s = await (await fetch("/sessions")).json();
+  live = s.live;
+  byId("session").innerHTML = s.sessions.map(x => {
+    const date = new Date(Number(x.name) * 1000).toLocaleString();
+    return `<option value="${x.name}">${date}${x.name === live ? " (live)" : ""} · ${Math.ceil(x.bytes / 1024)} KB</option>`;
+  }).join("");
+  byId("session").value = viewing || live;
+}
+async function view(name) {
+  viewing = name; entries = []; next = 0; selectedId = null; started = Number(name) * 1000;
+  byId("detail").innerHTML = `<div class="empty">Click an entry to see exactly what went in and what came out.</div>`;
+  if (name === live) await poll(true);
+  else { entries = await (await fetch("/session?name=" + name)).json(); renderList(); }
+}
+async function poll(once) {
+  if (viewing === live) {
+    try {
+      const t = await (await fetch("/trace?since=" + next)).json();
+      if (t.entries.length) {
+        entries.push(...t.entries);
+        next = t.next;
+        const list = byId("list"), atTop = list.scrollTop < 20;
+        renderList();
+        if (byId("follow").checked && atTop) list.scrollTop = 0;
+      } else if (once) renderList();
+    } catch {}
+  }
+  if (!once) setTimeout(poll, 1000);
+}
+
+byId("filters").innerHTML = FILTERS.map(([k, n]) => `<button class="chip${k === filter ? " on" : ""}" data-f="${k}">${n}</button>`).join(" ");
+byId("filters").onclick = ev => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  filter = b.dataset.f;
+  for (const x of byId("filters").children) x.classList.toggle("on", x === b);
+  renderList();
+};
+byId("search").oninput = renderList;
+byId("session").onchange = () => view(byId("session").value);
+(async () => {
+  await loadSessions();
+  await view(live);
+  // (from the brain page: the entry clicked there)
+  const id = Number(location.hash.slice(1));
+  if (location.hash && entries.some(e => e.id === id)) {
+    select(id);
+    byId("list").querySelector(".row.sel")?.scrollIntoView({ block: "center" });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>

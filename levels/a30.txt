@@ -1,0 +1,5 @@
+Mission: Halo
+
+Story so far: The Covenant attacked the Pillar of Autumn beside a giant ring in space. {player}, woken from cryo-sleep, reached the bridge, where Captain Keyes ordered the ship abandoned. Keyes gave {player} Cortana, the ship's AI, to keep what she knows about Earth from the Covenant, then stayed aboard to try to land the Autumn on the ring. {player} escaped in the last lifeboat and saw the Autumn hit by plasma torpedoes as Keyes flew it down.
+
+This mission: The lifeboat crashed on the ring, killing the pilot and the Marines aboard. Covenant dropships are on their way to hunt for survivors. Cortana wants to slip away into the hills, then check a nearby lifeboat beacon for other survivors from the Autumn.

@@ -1,0 +1,5 @@
+Mission: 343 Guilty Spark
+
+Story so far: The Pillar of Autumn crash-landed on the ring world Halo. {player}, carrying the ship's AI Cortana, rescued Captain Keyes, then reached Halo's control room. There Cortana plugged in and learned the Forerunners built the ring. She said the Covenant had uncovered something horrible buried in it and now fear it, and that the weapons cache Keyes is after is not what it seems. She stayed in the control room and sent {player} to stop Keyes.
+
+This mission: Foehammer, the Pelican pilot, drops {player} into a foggy swamp where Keyes's dropship was last heard from more than twelve hours ago. Covenant troops were seen fleeing through the swamp in a panic. The goal is to find Keyes, then radio Foehammer for pickup.

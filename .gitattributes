@@ -1,0 +1,2 @@
+# (a patch applies only with its own line endings)
+*.patch -text

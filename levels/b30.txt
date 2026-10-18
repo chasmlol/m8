@@ -1,0 +1,5 @@
+Mission: The Silent Cartographer
+
+Story so far: Captain Keyes crash-landed the Pillar of Autumn on a giant ring after a Covenant attack, and {player} escaped there with Cortana, the ship's AI. Helped by Foehammer, a Pelican pilot, {player} rescued survivors and freed Keyes from the Covenant cruiser Truth and Reconciliation. They learned the Covenant call the ring Halo, think it is a mighty weapon, and are hunting for its control room. Keyes ordered {player} to get there first.
+
+This mission: Two Pelicans drop {player} and Marines onto a Covenant-held island beach. Cortana says the Covenant believe their Silent Cartographer, a map room that shows the way to Halo's control center, lies under this island. The goal is to take the beach and find it.

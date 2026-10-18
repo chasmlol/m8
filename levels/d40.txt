@@ -1,0 +1,5 @@
+Mission: The Maw
+
+Story so far: Cortana, the AI {player} carries, learned that firing the ring world Halo would wipe out all sentient life in the galaxy to starve the parasitic Flood. Halo's Monitor, 343 Guilty Spark, wants it fired and turned his Sentinels on them. To destroy Halo by blowing up the crashed Pillar of Autumn's reactors, Cortana needed Captain Keyes's codes. Keyes had been taken over by the Flood, so {player} tore out his neural implants, giving Cortana the codes, and escaped in a stolen Banshee.
+
+This mission: The failing Banshee crashed into the wrecked Autumn and {player} climbed aboard. They must reach the bridge, where Cortana can use Keyes's implants to set the ship's fusion engines to overload, an explosion that should destroy the ring.

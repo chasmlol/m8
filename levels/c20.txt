@@ -1,0 +1,5 @@
+Mission: The Library
+
+Story so far: On the ring world Halo, Cortana, the AI {player} carries, stayed in its control room and sent {player} to stop Captain Keyes, who was after a weapons cache. In a swamp, {player} found Keyes's team overrun by the Flood, parasites that turn humans and Covenant into monsters, and Keyes was reported captured. Then a floating machine, 343 Guilty Spark, the Monitor of Installation 04, teleported {player} away. He said someone let the Flood loose and he needs {player}'s help to contain it.
+
+This mission: Guilty Spark has brought {player} to the Library, a vast facility on the ring, saying the Index must be retrieved from here before the installation can be activated. {player} must follow him and get it.

@@ -1,0 +1,19 @@
+[package]
+name = "mate"
+version = "0.1.0"
+edition = "2021"
+description = "Voice brain for an AI game mate: mic -> Parakeet -> LLM -> Pocket TTS -> game, then Kev decides"
+
+[dependencies]
+anyhow = "1.0"
+cpal = "0.16"
+ptts = { version = "0.4.0-rc.2", features = ["hf", "hub"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sherpa-onnx = "1.13.8"
+tiny_http = "0.12"
+toml = "0.8"
+ureq = { version = "2.12", features = ["json"] }
+
+[profile.release]
+debug = false

@@ -1,0 +1,43 @@
+From 4fd38e59374ee0106a88de0010072969a30f6dab Mon Sep 17 00:00:00 2001
+From: mate <mate@local>
+Date: Thu, 15 Oct 2026 12:43:39 +0100
+Subject: [PATCH] Encode a reference clip once, by its contents
+
+---
+ breeze_infer/audio.py | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/breeze_infer/audio.py b/breeze_infer/audio.py
+index 9f5d615..bb733b1 100644
+--- a/breeze_infer/audio.py
++++ b/breeze_infer/audio.py
+@@ -5,12 +5,26 @@ from __future__ import annotations
+ from pathlib import Path
+ from typing import Any
+ 
++import hashlib
++
+ import numpy as np
+ import soundfile as sf
+ import torch
+ 
+ 
++# (mate: a reference clip's codes by its contents' hash, so the same clip, sent with every
++# request, is encoded once)
++_encoded: dict[str, torch.Tensor] = {}
++
++
+ def encode_prompt_audio(audio_tokenizer: Any, audio_path: str | Path) -> torch.Tensor:
++    key = hashlib.sha256(Path(audio_path).read_bytes()).hexdigest()
++    if key not in _encoded:
++        _encoded[key] = _encode_prompt_audio(audio_tokenizer, audio_path)
++    return _encoded[key]
++
++
++def _encode_prompt_audio(audio_tokenizer: Any, audio_path: str | Path) -> torch.Tensor:
+     wav, sample_rate = sf.read(audio_path, always_2d=True, dtype="float32")
+     wav = np.mean(wav, axis=1)
+     encoded = audio_tokenizer.encode(wav, sr=sample_rate)
+-- 
+2.43.0
+

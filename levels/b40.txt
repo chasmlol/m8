@@ -1,0 +1,5 @@
+Mission: Assault on the Control Room
+
+Story so far: Captain Keyes crash-landed the Pillar of Autumn on the ring world Halo after a Covenant attack. {player} carries the ship's AI, Cortana. Helped by Foehammer, a Pelican pilot, {player} rescued Keyes from the Covenant, who believe Halo is a mighty weapon. Keyes sent {player} to reach its control room first, then dropped out of contact. A map room, the Silent Cartographer, showed the way, and Foehammer flew {player} there through tunnels under the ring.
+
+This mission: Foehammer's Pelican rises from a shaft inside a huge dome and can take them no further. {player} and Cortana continue on foot through an area the Covenant hold in force. The goal is to reach Halo's control room before the Covenant.

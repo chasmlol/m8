@@ -1,0 +1,5 @@
+Mission: The Pillar of Autumn
+
+Story so far: The Pillar of Autumn fled Reach with a blind jump, but the Covenant tracked it and got there first, waiting behind a planet where a giant ring-shaped structure hangs in orbit. The ship's fighters are clearing out a Covenant scout force, but several Covenant battle groups are about to arrive. Captain Keyes has put the ship on full combat alert, and Cortana, the ship's AI, is running its defence.
+
+This mission: {player} is thawed out of cryo-sleep as the battle begins, and Covenant troops are boarding the ship. The Captain wants {player} on the bridge immediately, so the first job is to get there through the fighting.
