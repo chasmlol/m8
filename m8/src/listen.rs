@@ -290,10 +290,10 @@ pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, game: Arc<
     let host = cpal::default_host();
     let device = microphone(&host, cfg.mic.device.as_deref())?;
     let supported = device.default_input_config()?;
-    let mic_rate = supported.sample_rate().0 as i32;
+    let mic_rate = supported.sample_rate() as i32;
     println!(
         "[mic] using '{}' at {} Hz, {} channel(s), {:?}",
-        device.name().unwrap_or_default(),
+        name(&device),
         mic_rate,
         supported.channels(),
         supported.sample_format()
@@ -339,13 +339,18 @@ fn microphone(host: &cpal::Host, wanted: Option<&str>) -> Result<cpal::Device> {
     if let Some(wanted) = wanted.map(str::to_lowercase).filter(|w| !w.is_empty()) {
         let found = host
             .input_devices()?
-            .find(|device| device.name().map(|name| name.to_lowercase().contains(&wanted)).unwrap_or(false));
+            .find(|device| name(device).to_lowercase().contains(&wanted));
         match found {
             Some(device) => return Ok(device),
             None => eprintln!("[mic] no microphone with \"{wanted}\" in its name: using the default one"),
         }
     }
     host.default_input_device().ok_or_else(|| anyhow!("no microphone found"))
+}
+
+/// A device's name, as the system shows it.
+fn name(device: &cpal::Device) -> String {
+    device.description().map(|d| d.name().to_string()).unwrap_or_default()
 }
 
 /// Peak and RMS level in dBFS.
@@ -376,7 +381,7 @@ fn build_input_stream(
 
     let stream = match supported.sample_format() {
         SampleFormat::F32 => device.build_input_stream(
-            &config,
+            config,
             move |data: &[f32], _| {
                 let _ = tx.send(to_mono(data, channels, |s| s));
             },
@@ -384,7 +389,7 @@ fn build_input_stream(
             None,
         )?,
         SampleFormat::I16 => device.build_input_stream(
-            &config,
+            config,
             move |data: &[i16], _| {
                 let _ = tx.send(to_mono(data, channels, |s| s as f32 / i16::MAX as f32));
             },
