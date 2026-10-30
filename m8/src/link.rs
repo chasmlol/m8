@@ -181,3 +181,52 @@ impl GameLink {
         }
     }
 }
+
+/// Halo's mod has one speaker, the mate: every speaker's state is its one state, and its voice
+/// streams as it's made.
+impl crate::game::Game for GameLink {
+    fn state(&self, _speaker: &str) -> Value {
+        self.state.lock().unwrap().clone()
+    }
+
+    fn act(&self, _speaker: &str, action: &Value) {
+        self.send_json(action);
+    }
+
+    fn heard(&self, _speaker: &str, text: &str) {
+        self.send_json(&json!({"type": "heard", "text": text}));
+    }
+
+    fn sentence(&self, _speaker: &str, text: &str, _how: &str) {
+        self.say(text);
+    }
+
+    fn audio(&self, _speaker: &str, samples: &[f32], _rate: u32) {
+        let pcm: Vec<u8> = samples.iter().flat_map(|&s| ((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes()).collect();
+        self.send_audio(&pcm);
+    }
+
+    fn line_end(&self, _speaker: &str) {
+        self.send_json(&json!({"type": "audio_end"}));
+    }
+
+    fn stop_audio(&self) {
+        self.send_json(&json!({"type": "stop_audio"}));
+    }
+
+    fn mic_muted(&self) -> bool {
+        self.mic_muted.load(Ordering::Relaxed)
+    }
+
+    fn speech_cooldown(&self) -> Duration {
+        GameLink::speech_cooldown(self)
+    }
+
+    fn view(&self, wait: Duration) -> Option<View> {
+        GameLink::view(self, wait)
+    }
+
+    fn set_shown_state(&self, state: Value) {
+        *self.state.lock().unwrap() = state;
+    }
+}

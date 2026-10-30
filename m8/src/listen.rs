@@ -1,14 +1,15 @@
 //! Open-mic speech recognition: microphone -> Silero VAD (here) -> a speech-to-text server.
 
 use crate::config::{path_str, Config};
-use crate::link::GameLink;
-use serde_json::{json, Value};
+use crate::game::Game;
+use serde_json::Value;
 use anyhow::{anyhow, bail, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use sherpa_onnx::{LinearResampler, VadModelConfig, VoiceActivityDetector};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::Speaking;
@@ -40,26 +41,64 @@ impl Transcriber {
 
     /// What's said in 16 kHz mono audio.
     pub fn transcribe(&self, samples: &[f32]) -> Result<String> {
+        let reply = self.request(samples, SAMPLE_RATE as u32, false)?;
+        Ok(reply["text"].as_str().unwrap_or_default().trim().to_string())
+    }
+
+    /// What's said in mono audio at `rate`, and when each word is (OpenAI's `verbose_json` with
+    /// word timestamps; a server without them gives none).
+    pub fn words(&self, samples: &[f32], rate: u32) -> Result<(String, Vec<Word>)> {
+        let reply = self.request(samples, rate, true)?;
+        let words = reply["words"]
+            .as_array()
+            .map(|words| {
+                words
+                    .iter()
+                    .filter_map(|w| {
+                        let text = w["word"].as_str()?.trim().to_string();
+                        Some(Word { text, start: w["start"].as_f64()? as f32, end: w["end"].as_f64()? as f32 })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok((reply["text"].as_str().unwrap_or_default().trim().to_string(), words))
+    }
+
+    fn request(&self, samples: &[f32], rate: u32, verbose: bool) -> Result<Value> {
         const BOUNDARY: &str = "m8-audio-boundary";
         let mut body = Vec::new();
+        let mut field = |name: &str, value: &str| {
+            body.extend(format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").bytes());
+        };
         if let Some(model) = &self.model {
-            body.extend(format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n").bytes());
+            field("model", model);
+        }
+        if verbose {
+            field("response_format", "verbose_json");
+            field("timestamp_granularities[]", "word");
         }
         body.extend(
             format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\nContent-Type: audio/wav\r\n\r\n")
                 .bytes(),
         );
-        body.extend(wav(samples, SAMPLE_RATE as u32));
+        body.extend(wav(samples, rate));
         body.extend(format!("\r\n--{BOUNDARY}--\r\n").bytes());
-        let reply: Value = self
+        Ok(self
             .agent
             .post(&self.url)
             .set("Content-Type", &format!("multipart/form-data; boundary={BOUNDARY}"))
             .send_bytes(&body)
             .map_err(|e| anyhow!("speech-to-text at {}: {e}", self.url))?
-            .into_json()?;
-        Ok(reply["text"].as_str().unwrap_or_default().trim().to_string())
+            .into_json()?)
     }
+}
+
+/// A word heard, and when it's said (seconds into the audio).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Word {
+    pub text: String,
+    pub start: f32,
+    pub end: f32,
 }
 
 /// A WAV of mono audio (-1 to 1), 16-bit.
@@ -244,11 +283,12 @@ impl Listener {
 
 /// Runs forever on the calling thread, sending each finished utterance's text to `out`.
 ///
-/// With barge-in on, the mic stays live while the mate talks: as soon as the player starts
-/// speaking, the mate is cut off (queued audio in the game, pending TTS and the LLM reply).
-pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, link: GameLink, out: Sender<String>) -> Result<()> {
+/// With barge-in on, the mic stays live while someone talks: as soon as the player starts
+/// speaking, they're cut off (queued audio in the game, pending TTS and the LLM reply). Each time
+/// the player starts talking the game hears of it (`listening`), before the words are known.
+pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, game: Arc<dyn Game>, out: Sender<String>) -> Result<()> {
     let host = cpal::default_host();
-    let device = host.default_input_device().ok_or_else(|| anyhow!("no microphone found"))?;
+    let device = microphone(&host, cfg.mic.device.as_deref())?;
     let supported = device.default_input_config()?;
     let mic_rate = supported.sample_rate().0 as i32;
     println!(
@@ -264,21 +304,27 @@ pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, link: Game
     stream.play()?;
 
     let (barge_in, mute_while_speaking) = (cfg.mic.barge_in, cfg.mic.mute_while_speaking);
-    let name = cfg.mate.name.clone();
     let mut listener = Listener::new(cfg, transcriber, mic_rate)?;
+    let mut was_talking = false;
     for chunk in rx {
         let mate_talking = speaking.is_speaking();
-        // (muted in the game: nothing heard, and he isn't cut off; the listener starts over,
-        // without counting the sound as talked over him)
-        if link.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
+        // (muted in the game: nothing heard, and no one's cut off; the listener starts over,
+        // without counting the sound as talked over them)
+        if game.mic_muted() {
             listener.feed(Vec::new(), true);
+            was_talking = false;
             continue;
         }
         let heard = listener.feed(chunk, !barge_in && mute_while_speaking && mate_talking);
-        if barge_in && mate_talking && listener.speech_active() {
-            println!("[mic] you talked over {name}, cutting them off");
+        let talking = listener.speech_active();
+        if talking && !was_talking {
+            game.listening();
+        }
+        was_talking = talking;
+        if barge_in && mate_talking && talking {
+            println!("[mic] you talked over them, cutting them off");
             speaking.interrupt();
-            link.send_json(&json!({"type": "stop_audio"}));
+            game.stop_audio();
         }
         for text in heard {
             if out.send(text).is_err() {
@@ -288,6 +334,20 @@ pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, link: Game
     }
     Ok(())
 }
+/// The input device whose name has `wanted` in it (case ignored), else the default one.
+fn microphone(host: &cpal::Host, wanted: Option<&str>) -> Result<cpal::Device> {
+    if let Some(wanted) = wanted.map(str::to_lowercase).filter(|w| !w.is_empty()) {
+        let found = host
+            .input_devices()?
+            .find(|device| device.name().map(|name| name.to_lowercase().contains(&wanted)).unwrap_or(false));
+        match found {
+            Some(device) => return Ok(device),
+            None => eprintln!("[mic] no microphone with \"{wanted}\" in its name: using the default one"),
+        }
+    }
+    host.default_input_device().ok_or_else(|| anyhow!("no microphone found"))
+}
+
 /// Peak and RMS level in dBFS.
 fn level_db(samples: &[f32]) -> (f32, f32) {
     if samples.is_empty() {

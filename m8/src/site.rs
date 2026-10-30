@@ -5,7 +5,7 @@
 //! model call with exactly what went in and what came out (logs/<started>.jsonl keeps them).
 
 use crate::brain::Input;
-use crate::link::GameLink;
+use crate::game::Game;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::Write;
@@ -124,7 +124,7 @@ pub fn run(
     system: PromptFile,
     combat: PromptFile,
     radio: PromptFile,
-    link: GameLink,
+    game: Arc<dyn Game>,
     inputs: Sender<Input>,
 ) -> anyhow::Result<()> {
     let server = tiny_http::Server::http(("127.0.0.1", PORT)).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -140,7 +140,7 @@ pub fn run(
             ("GET", "/trace") => {
                 let since: usize = url.split("since=").nth(1).and_then(|n| n.parse().ok()).unwrap_or(0);
                 let traced = trace.0.lock().unwrap();
-                let state = link.state.lock().unwrap().clone();
+                let state = game.shown_state();
                 let new = traced.entries.get(since..).unwrap_or_default();
                 tiny_http::Response::from_string(
                     json!({"prompt": traced.prompt, "entries": new, "next": traced.entries.len(), "state": state,
@@ -179,11 +179,11 @@ pub fn run(
                 Err(e) => tiny_http::Response::from_string(e.to_string()).with_status_code(500),
             },
             ("POST", "/say") => {
-                let _ = inputs.send(Input::Heard(body));
+                let _ = inputs.send(Input::heard(body));
                 tiny_http::Response::from_string("")
             }
             ("POST", "/event") => {
-                let _ = inputs.send(Input::Event { text: body, react: true });
+                let _ = inputs.send(Input::event(body, true));
                 tiny_http::Response::from_string("")
             }
             ("POST", "/save") => {
@@ -196,7 +196,7 @@ pub fn run(
             }
             ("POST", "/state") => match serde_json::from_str::<Value>(&body) {
                 Ok(state) => {
-                    *link.state.lock().unwrap() = state;
+                    game.set_shown_state(state);
                     tiny_http::Response::from_string("")
                 }
                 Err(e) => tiny_http::Response::from_string(e.to_string()).with_status_code(400),

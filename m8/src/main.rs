@@ -1,4 +1,5 @@
-//! `m8`: a voice brain for an AI companion (the mate) in any game that speaks its link (link.rs).
+//! `m8`: the brain of an AI companion (the mate) in any game that speaks its link (link.rs):
+//! Halo's mod.
 //!
 //! mic -> Silero VAD -> speech to text -> the feed -> Kev (decide) -> LLM (words) -> TTS -> the game
 //! Each model is a server m8 calls (m8.toml); watch and poke it at http://127.0.0.1:8090 (site.rs).
@@ -7,81 +8,15 @@
 //! or `m8 [m8.toml] --simulate-mic a.wav b.wav` (WAVs through the mic's pipeline).
 //! While running you can also type a line into the console to "say" it without a mic.
 
-mod brain;
-mod config;
-mod link;
-mod listen;
-mod picture;
-mod site;
-mod speak;
-
 use anyhow::Result;
-use config::Config;
+use m8::config::Config;
+use m8::game::Game;
+use m8::{brain, link, listen, site, speak, Speaking};
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// Shared state about the mate's voice: when its queued speech will finish playing, and a
-/// generation counter that the player bumps by talking over it. Everything produced for an
-/// older generation (LLM tokens, TTS audio) is dropped.
-#[derive(Clone)]
-pub struct Speaking {
-    until: Arc<Mutex<Instant>>,
-    generation: Arc<AtomicU64>,
-    /// Lines begun (the LLM writing them) whose voicing hasn't finished: speak.rs counts each
-    /// off at its end.
-    lines: Arc<AtomicUsize>,
-}
-
-impl Speaking {
-    /// Extra time counted as "still speaking" after the audio, covering playback latency and room echo.
-    const TAIL: Duration = Duration::from_millis(500);
-
-    fn new() -> Self {
-        Speaking {
-            until: Arc::new(Mutex::new(Instant::now())),
-            generation: Arc::new(AtomicU64::new(0)),
-            lines: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    /// A line begun: until its end, he's talking.
-    pub fn begin_line(&self) {
-        self.lines.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// A line's voicing finished (or was dropped).
-    pub fn end_line(&self) {
-        let _ = self.lines.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
-    }
-
-    /// When his voice stops (or stopped): none while a line is still being written or voiced.
-    pub fn quiet_from(&self) -> Option<Instant> {
-        (self.lines.load(Ordering::SeqCst) == 0).then(|| *self.until.lock().unwrap())
-    }
-
-    pub fn extend(&self, audio: Duration) {
-        let mut until = self.until.lock().unwrap();
-        *until = (*until).max(Instant::now()) + audio;
-    }
-
-    pub fn is_speaking(&self) -> bool {
-        Instant::now() < *self.until.lock().unwrap() + Self::TAIL
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation.load(Ordering::SeqCst)
-    }
-
-    /// The player talked over the mate: abandon everything it was about to say.
-    pub fn interrupt(&self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        *self.until.lock().unwrap() = Instant::now() - Self::TAIL;
-    }
-}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -125,13 +60,17 @@ fn main() -> Result<()> {
     }
 
     let transcriber = listen::Transcriber::new(&cfg);
-    let voice = speak::Voice::load(&cfg)?;
+    let voice = speak::Voice::connect(&cfg.mate.voice_server, cfg.mate.voice_seed)?;
+    if cfg.mate.voice_reference.is_none() {
+        anyhow::bail!("no voice_reference in [mate]: the clip the mate's voice is cloned from");
+    }
 
     let (inputs_tx, inputs_rx) = mpsc::channel::<brain::Input>();
     let (events_tx, events_rx) = mpsc::channel();
     let (hearing_tx, hearing_rx) = mpsc::channel::<link::Heard>();
     let hello = json!({"type": "hello", "name": cfg.mate.name, "sample_rate": voice.sample_rate});
     let link = link::GameLink::start(cfg.game.port, hello, events_tx, hearing_tx)?;
+    let game: Arc<dyn Game> = Arc::new(link);
     println!("Waiting for a game on 127.0.0.1:{}", cfg.game.port);
 
     let forward = inputs_tx.clone();
@@ -143,8 +82,8 @@ fn main() -> Result<()> {
                 Some("loaded") => brain::Input::Loaded(text("id")),
                 // (typed in the game by the player, as a game master's line: what models are
                 // trained to take as out of character, about the world)
-                Some("direct") => brain::Input::Event { text: format!("Game master: {}", text("text")), react: true },
-                _ => brain::Input::Event { text: text("text"), react: msg["react"].as_bool().unwrap_or(true) },
+                Some("direct") => brain::Input::event(format!("Game master: {}", text("text")), true),
+                _ => brain::Input::event(text("text"), msg["react"].as_bool().unwrap_or(true)),
             };
             let _ = forward.send(input);
         }
@@ -175,10 +114,10 @@ fn main() -> Result<()> {
                 println!("[hearing] {speaker}{over_radio}: \"{text}\"");
                 // (the line is sent as it starts: he lets them finish before he answers)
                 std::thread::sleep(length.saturating_sub(started.elapsed()));
-                let _ = inputs.send(brain::Input::Event {
-                    text: format!("{speaker}{over_radio}: \"{text}\""),
-                    react: about["react"].as_bool().unwrap_or(true),
-                });
+                let _ = inputs.send(brain::Input::event(
+                    format!("{speaker}{over_radio}: \"{text}\""),
+                    about["react"].as_bool().unwrap_or(true),
+                ));
             }
         });
     }
@@ -192,10 +131,10 @@ fn main() -> Result<()> {
     let combat = site::PromptFile::load(persona.join("combat_prompt.txt"))?;
     let radio = site::PromptFile::load(persona.join("radio_prompt.txt"))?;
     {
-        let (trace, system, combat, radio, link, inputs) =
-            (trace.clone(), system.clone(), combat.clone(), radio.clone(), link.clone(), inputs_tx.clone());
+        let (trace, system, combat, radio, game, inputs) =
+            (trace.clone(), system.clone(), combat.clone(), radio.clone(), game.clone(), inputs_tx.clone());
         std::thread::spawn(move || {
-            if let Err(e) = site::run(trace, system, combat, radio, link, inputs) {
+            if let Err(e) = site::run(trace, system, combat, radio, game, inputs) {
                 eprintln!("[site] stopped: {e:#}");
             }
         });
@@ -205,24 +144,24 @@ fn main() -> Result<()> {
     let speaking = Speaking::new();
     let (speech_tx, speech_rx) = mpsc::channel();
     {
-        let (link, speaking, trace) = (link.clone(), speaking.clone(), trace.clone());
+        let (game, speaking, trace) = (game.clone(), speaking.clone(), trace.clone());
         std::thread::spawn(move || {
-            if let Err(e) = speak::run(voice, link, speaking, trace, speech_rx) {
+            if let Err(e) = speak::run(voice, game, speaking, trace, speech_rx) {
                 eprintln!("[tts] stopped: {e:#}");
             }
         });
     }
 
     {
-        let (cfg, heard_tx, link, speaking) = (cfg.clone(), inputs_tx.clone(), link.clone(), speaking.clone());
+        let (cfg, heard_tx, game, speaking) = (cfg.clone(), inputs_tx.clone(), game.clone(), speaking.clone());
         std::thread::spawn(move || {
             let (tx, rx) = mpsc::channel::<String>();
             std::thread::spawn(move || {
                 for text in rx {
-                    let _ = heard_tx.send(brain::Input::Heard(text));
+                    let _ = heard_tx.send(brain::Input::heard(text));
                 }
             });
-            if let Err(e) = listen::run(cfg, transcriber, speaking, link, tx) {
+            if let Err(e) = listen::run(cfg, transcriber, speaking, game, tx) {
                 eprintln!("[mic] stopped: {e:#}");
             }
         });
@@ -235,12 +174,12 @@ fn main() -> Result<()> {
         for line in std::io::stdin().lines().map_while(Result::ok) {
             let line = line.trim().to_string();
             if !line.is_empty() {
-                let _ = typed.send(brain::Input::Heard(line));
+                let _ = typed.send(brain::Input::heard(line));
             }
         }
     });
 
     println!("Ready! Talk to {} (or type a line here).", cfg.mate.name);
-    brain::Brain::new(cfg, link, speech_tx, speaking, trace, system, combat, radio, brain_inputs).run(inputs_rx);
+    brain::Brain::new(cfg, game, speech_tx, speaking, trace, system, combat, radio, brain_inputs).run(inputs_rx);
     Ok(())
 }

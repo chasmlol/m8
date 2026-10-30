@@ -7,6 +7,11 @@ m8 knows nothing about any one game. The game tells it what's going on, in words
 mate can do right now; m8 sends back what the mate does, and its voice. Hook up any game that
 can open a socket, plug in the models you like, write a persona.
 
+It's also a library (`m8` crate): a game where anyone can be talked to has many speakers, each
+with their own memory, persona and cloned voice, and m8 makes the mouth shapes for what they say
+(`lips.rs`: FaceGen's 16 phonemes, at the times speech to text hears each word). A VR runtime
+runs it as a plugin for every character in its games.
+
 > **Not a release.** This is a working setup shared as it is, for power users to pull, fork and
 > bend to their own game and models. It runs on Windows with an NVIDIA GPU, starts with
 > PowerShell scripts, and expects you to read the code.
@@ -25,7 +30,8 @@ with it is **Kevin**, a Spartan ([examples/kevin](examples/kevin)).
    says what's there, or picks one of the spots marked on the ground).
 4. For the game's events, the decision model says whether the mate speaks. Your lines are always
    answered. After the mate stops talking, the game's events can't start it again until the
-   cooldown (the game sends it).
+   cooldown (the game sends it). The decision model is optional (`[kev] enabled`, off unless
+   set): without it your lines are answered and nothing else starts one.
 5. The LLM writes the line, with how to say it ("[yelling over gunfire]") and sounds
    ("(laugh)"); the TTS says it, sentence by sentence; the game plays it.
 
@@ -42,9 +48,9 @@ like, local or not. It speaks the APIs of what I used:
 | Job | API m8 calls | What I ran behind it |
 | --- | --- | --- |
 | Decide | llama.cpp's `/v1/systemone` (`[kev] url`) | [Kev-4B](https://huggingface.co/ggml-org/Kev-4B-GGUF) Q8, a decision model: it scores options, it doesn't write. Its server reads its whole prompt every call, so m8 gives it only the feed's newest 20 lines |
-| Talk and see | OpenAI-style `/v1/chat/completions` (`[llm] url`), images in the messages to see | [Gemma 4 12B QAT, uncensored by HauhauCS](https://huggingface.co/HauhauCS/Gemma4-12B-QAT-Uncensored-HauhauCS-Balanced) Q4_K_M with its mmproj, on llama.cpp |
+| Talk and see | OpenAI-style `/v1/chat/completions` (`[llm] url`), images in the messages to see; a hosted one takes `model`, `api_key_env` (the variable holding its key) and `[llm.extra]` | [Gemma 4 12B QAT, uncensored by HauhauCS](https://huggingface.co/HauhauCS/Gemma4-12B-QAT-Uncensored-HauhauCS-Balanced) Q4_K_M with its mmproj, on llama.cpp; or DeepSeek's API |
 | Speak | Breeze TTS 2's `/v1/audio/speech`, streamed (`voice_server`) | [Breeze TTS 2](https://huggingface.co/BreezeBlue/breeze-tts-2), cloning a voice clip, on [breeze-tts](https://github.com/breezeblue-ai/breeze-tts) in WSL |
-| Hear | OpenAI-style `/v1/audio/transcriptions` (`[stt] url`) | [Parakeet TDT 0.6B v2](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) int8, on `stt-server` (built with m8) |
+| Hear | OpenAI-style `/v1/audio/transcriptions` (`[stt] url`), with `verbose_json` word times for the mouth's shapes | [Parakeet TDT 0.6B v2](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) int8, on `stt-server` (built with m8) |
 
 Using something else (another API, half local and half hosted): each call is in one place to
 change. Deciding is `Brain::kev` (`brain.rs`), talking `Brain::say`, seeing `Brain::look`,
@@ -175,10 +181,12 @@ built in `halo/`. Change the scripts for your own servers and game.
 
 ## The code
 
-`m8/src`: `brain.rs` (the feed, decisions, the LLM, the mate's eyes, memory), `listen.rs` (the
-mic, Silero, speech to text), `speak.rs` (the voice), `link.rs` (the game), `site.rs` (the
-pages), `picture.rs` (the view's numbered spots), `config.rs` (`m8.toml`), and
-`bin/stt-server.rs` (Parakeet behind the transcriptions endpoint).
+`m8/src`: `brain.rs` (each speaker's feed, decisions, the LLM, the eyes, memory), `game.rs`
+(what the brain needs of a game), `listen.rs` (the mic, Silero, speech to text), `speak.rs` (the
+voice), `lips.rs` (the mouth's shapes), `llm.rs` (the LLM's endpoint, local or hosted), `link.rs`
+(Halo's socket), `site.rs` (the pages), `picture.rs` (the view's numbered spots), `config.rs`
+(`m8.toml`), `main.rs` (the `m8` binary, for Halo) and `bin/stt-server.rs` (Parakeet behind the
+transcriptions endpoint).
 
 ## Licence
 

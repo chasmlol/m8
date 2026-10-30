@@ -30,11 +30,19 @@ save_recordings = false
 url = "http://127.0.0.1:8083/v1/audio/transcriptions"
 
 [kev]
-# The decision model: llama.cpp's /v1/systemone (start-kev.ps1).
+# The decision model: llama.cpp's /v1/systemone (start-kev.ps1). It picks Kevin's actions and
+# whether the game's events make him speak; off (the default), only your lines are answered.
+enabled = true
 url = "http://127.0.0.1:8080/v1/systemone"
 
 [llm]
-# The LLM: an OpenAI-style /v1/chat/completions (start-chat.ps1).
+# The LLM: an OpenAI-style /v1/chat/completions (start-chat.ps1). A hosted one takes its model and
+# its key's environment variable, and anything else it wants in every request in [llm.extra]:
+#   url = "https://api.deepseek.com/chat/completions"
+#   model = "deepseek-flash"
+#   api_key_env = "DEEPSEEK_API_KEY"
+#   [llm.extra]
+#   thinking = { type = "disabled" }
 url = "http://127.0.0.1:8081/v1/chat/completions"
 temperature = 1.0
 

@@ -1,6 +1,9 @@
 //! `stt-server`: Parakeet TDT (sherpa-onnx's int8 export) behind an OpenAI-style speech-to-text
 //! endpoint, for m8 (or anything) to call: POST /v1/audio/transcriptions with a WAV (a multipart
-//! `file`, or the body itself) gives `{"text": ...}`; GET /health says it's up.
+//! `file`, or the body itself) gives `{"text": ...}`; GET /health says it's up. With the form's
+//! `response_format` set to `verbose_json` it also gives `words`, each with its `start` and `end`
+//! in seconds (OpenAI's `timestamp_granularities[]=word`): when each word is said, which is when a
+//! character's mouth makes it.
 //!
 //! Usage: `stt-server <the model's folder> [port]` (port 8083 if none).
 
@@ -42,14 +45,21 @@ fn main() -> Result<()> {
                 let mut body = Vec::new();
                 let _ = request.as_reader().read_to_end(&mut body);
                 let start = Instant::now();
+                let verbose = field(&content_type, &body, "response_format").is_some_and(|f| f.trim_ascii() == b"verbose_json");
                 match wav_of(&content_type, &body).and_then(|wav| samples(&wav)) {
                     Ok(audio) => {
                         let stream = recognizer.create_stream();
                         stream.accept_waveform(SAMPLE_RATE, &audio);
                         recognizer.decode(&stream);
-                        let text = stream.get_result().map(|r| r.text.trim().to_string()).unwrap_or_default();
-                        println!("\"{text}\" ({:.1}s audio, {} ms)", audio.len() as f32 / SAMPLE_RATE as f32, start.elapsed().as_millis());
-                        tiny_http::Response::from_string(json!({"text": text}).to_string())
+                        let result = stream.get_result();
+                        let text = result.as_ref().map(|r| r.text.trim().to_string()).unwrap_or_default();
+                        let seconds = audio.len() as f32 / SAMPLE_RATE as f32;
+                        println!("\"{text}\" ({seconds:.1}s audio, {} ms)", start.elapsed().as_millis());
+                        let reply = match (verbose, &result) {
+                            (true, Some(result)) => json!({"text": text, "duration": seconds, "words": words(result, seconds)}),
+                            _ => json!({"text": text}),
+                        };
+                        tiny_http::Response::from_string(reply.to_string())
                     }
                     Err(e) => tiny_http::Response::from_string(json!({"error": format!("{e:#}")}).to_string()).with_status_code(400),
                 }
@@ -61,11 +71,37 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// The WAV in a request: the multipart form's `file`, else the body itself.
-fn wav_of<'a>(content_type: &str, body: &'a [u8]) -> Result<&'a [u8]> {
-    let Some(boundary) = content_type.split("boundary=").nth(1) else {
-        return Ok(body);
-    };
+/// The words heard and when each is said. Parakeet's tokens are pieces of words, each one that
+/// starts a word beginning with a space, at the time it was heard; a word ends with its last
+/// piece's duration, or where the next word begins.
+fn words(result: &sherpa_onnx::OfflineRecognizerResult, seconds: f32) -> Vec<serde_json::Value> {
+    let Some(times) = &result.timestamps else { return Vec::new() };
+    let mut words: Vec<(String, f32, f32)> = Vec::new();
+    for (i, (token, &at)) in result.tokens.iter().zip(times).enumerate() {
+        let starts = token.starts_with([' ', '\u{2581}']) || words.is_empty();
+        let piece = token.trim_start_matches([' ', '\u{2581}']);
+        let end = result.durations.as_ref().and_then(|d| d.get(i)).map_or(seconds, |d| at + d.max(0.04));
+        match words.last_mut() {
+            Some(word) if !starts => {
+                word.0.push_str(piece);
+                word.2 = end;
+            }
+            _ => words.push((piece.to_string(), at, end)),
+        }
+    }
+    for i in 0..words.len().saturating_sub(1) {
+        words[i].2 = words[i].2.max(words[i].1).min(words[i + 1].1);
+    }
+    words
+        .into_iter()
+        .filter(|(word, ..)| word.chars().any(char::is_alphanumeric))
+        .map(|(word, start, end)| json!({"word": word, "start": start, "end": end.min(seconds)}))
+        .collect()
+}
+
+/// A part of a multipart form, by its name (none for a body that isn't a form).
+fn field<'a>(content_type: &str, body: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    let boundary = content_type.split("boundary=").nth(1)?;
     let marker = format!("--{}", boundary.trim_matches('"'));
     let find = |haystack: &[u8], needle: &[u8], from: usize| {
         haystack[from..].windows(needle.len()).position(|w| w == needle).map(|at| at + from)
@@ -73,16 +109,24 @@ fn wav_of<'a>(content_type: &str, body: &'a [u8]) -> Result<&'a [u8]> {
     let mut at = 0;
     while let Some(part) = find(body, marker.as_bytes(), at) {
         let headers_start = part + marker.len();
-        let Some(headers_end) = find(body, b"\r\n\r\n", headers_start) else { break };
+        let headers_end = find(body, b"\r\n\r\n", headers_start)?;
         let headers = String::from_utf8_lossy(&body[headers_start..headers_end]);
         let data_start = headers_end + 4;
         let data_end = find(body, format!("\r\n{marker}").as_bytes(), data_start).unwrap_or(body.len());
-        if headers.contains("name=\"file\"") {
-            return Ok(&body[data_start..data_end]);
+        if headers.contains(&format!("name=\"{name}\"")) {
+            return Some(&body[data_start..data_end]);
         }
         at = data_end;
     }
-    bail!("no `file` in the form")
+    None
+}
+
+/// The WAV in a request: the multipart form's `file`, else the body itself.
+fn wav_of<'a>(content_type: &str, body: &'a [u8]) -> Result<&'a [u8]> {
+    if !content_type.contains("boundary=") {
+        return Ok(body);
+    }
+    field(content_type, body, "file").ok_or_else(|| anyhow!("no `file` in the form"))
 }
 
 /// A WAV's audio (16-bit or float, any channels and rate) as 16 kHz mono.
