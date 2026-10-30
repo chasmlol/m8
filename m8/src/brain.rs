@@ -144,8 +144,10 @@ impl Brain {
                 Kept::Mate(memory) => (id, HashMap::from([(MATE.to_string(), memory)])),
             })
             .collect();
+        let llm = Llm::new(&cfg.llm);
+        llm.keep_warm();
         Brain {
-            llm: Llm::new(&cfg.llm),
+            llm,
             cfg,
             game,
             speech,
