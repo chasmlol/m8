@@ -371,7 +371,12 @@ fn build_input_stream(
 ) -> Result<cpal::Stream> {
     let config = supported.config();
     let channels = config.channels as usize;
-    let err_fn = |err| eprintln!("[mic] stream error: {err:?}");
+    // (an overrun drops a few samples of the mic's, nothing to say about)
+    let err_fn = |err: cpal::Error| {
+        if err.kind() != cpal::ErrorKind::Xrun {
+            eprintln!("[mic] stream error: {err:?}");
+        }
+    };
 
     fn to_mono<T: Copy>(data: &[T], channels: usize, conv: impl Fn(T) -> f32) -> Vec<f32> {
         data.chunks(channels)
