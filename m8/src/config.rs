@@ -41,6 +41,10 @@ pub struct MateConfig {
     /// Its noise seed, so every line comes out in the same voice.
     #[serde(default = "seed")]
     pub voice_seed: u64,
+    /// Say each line as its "[...]" note says ("shouting over gunfire"): Breeze's guidance, about
+    /// twice the work. Off, lines are said plainly, twice as fast.
+    #[serde(default = "yes")]
+    pub voice_instruct: bool,
 }
 
 #[derive(Deserialize, Clone)]

@@ -36,6 +36,9 @@ pub struct Voice {
     /// The clips it clones, by their files, read once.
     references: HashMap<PathBuf, Reference>,
     seed: u64,
+    /// Say each line as its "[...]" note says (Breeze's guidance: a pass with the instruction and
+    /// one without, blended, so about twice the work), or plainly.
+    instruct: bool,
     pub sample_rate: u32,
 }
 
@@ -53,7 +56,14 @@ impl Voice {
             .map_err(|e| anyhow!("voice server at {url} isn't up (start-breeze.ps1): {e}"))?
             .into_json()?;
         let sample_rate = info["sample_rate"].as_u64().ok_or_else(|| anyhow!("voice server sent no sample rate"))? as u32;
-        Ok(Voice { url: url.to_string(), agent, references: HashMap::new(), seed, sample_rate })
+        Ok(Voice { url: url.to_string(), agent, references: HashMap::new(), seed, instruct: true, sample_rate })
+    }
+
+    /// Whether lines are said as their notes say (on unless turned off): off, Breeze runs twice as
+    /// fast, which matters where the GPU is shared with a game's rendering.
+    pub fn instructed(mut self, on: bool) -> Self {
+        self.instruct = on;
+        self
     }
 
     /// The clip at `path` and its transcript (the .txt beside it), read the first time it's used.
@@ -72,12 +82,13 @@ impl Voice {
     /// connection stops the server's generation).
     pub fn stream(&mut self, text: &str, how: &str, voice: &Path, mut on_chunk: impl FnMut(&[f32]) -> bool) -> Result<()> {
         const BOUNDARY: &str = "mate-speech-boundary";
-        let seed = self.seed;
+        let (seed, instruct) = (self.seed, self.instruct);
         let reference = self.reference(voice)?;
         let mut body = Vec::new();
         let mut field = |name: &str, value: &str| {
             body.extend(format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").bytes());
         };
+        let how = if instruct { how } else { "" };
         field("text", text);
         if !how.is_empty() {
             field("instruction", how);
@@ -135,7 +146,16 @@ pub fn run(mut voice: Voice, game: Arc<dyn Game>, speaking: Speaking, trace: Tra
     // takes over from an older one still playing as its first audio arrives, not before)
     let mut audio_generation = None;
     let mut audio_until = Instant::now();
-    for job in jobs {
+    // (a job taken while gathering a line's sentences, for next)
+    let mut held = None;
+    loop {
+        let job = match held.take() {
+            Some(job) => job,
+            None => match jobs.recv() {
+                Ok(job) => job,
+                Err(_) => break,
+            },
+        };
         match job {
             SpeechJob::Sentence { generation, .. } if generation != speaking.generation() => {
                 // Queued before the player talked over the speaker.
@@ -146,7 +166,24 @@ pub fn run(mut voice: Voice, game: Arc<dyn Game>, speaking: Speaking, trace: Tra
                 }
                 speaking.end_line();
             }
-            SpeechJob::Sentence { speaker, text, how, voice: clip, generation } => {
+            SpeechJob::Sentence { speaker, mut text, how, voice: clip, generation } => {
+                // The line's next sentences already written go with it, as one request: each
+                // request has a wait of its own before its first audio (a line's first sentence
+                // goes alone, before the rest is written; the rest follow it as one).
+                while let Ok(next) = jobs.try_recv() {
+                    match next {
+                        SpeechJob::Sentence { speaker: s, text: t, how: h, voice: v, generation: g }
+                            if s == speaker && g == generation && v == clip && (h == how || !voice.instruct) =>
+                        {
+                            text.push(' ');
+                            text.push_str(&t);
+                        }
+                        other => {
+                            held = Some(other);
+                            break;
+                        }
+                    }
+                }
                 game.sentence(&speaker, &text, &how);
                 let start = Instant::now();
                 let mut first_chunk_ms = None;

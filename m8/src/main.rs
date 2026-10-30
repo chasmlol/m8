@@ -60,7 +60,7 @@ fn main() -> Result<()> {
     }
 
     let transcriber = listen::Transcriber::new(&cfg);
-    let voice = speak::Voice::connect(&cfg.mate.voice_server, cfg.mate.voice_seed)?;
+    let voice = speak::Voice::connect(&cfg.mate.voice_server, cfg.mate.voice_seed)?.instructed(cfg.mate.voice_instruct);
     if cfg.mate.voice_reference.is_none() {
         anyhow::bail!("no voice_reference in [mate]: the clip the mate's voice is cloned from");
     }
