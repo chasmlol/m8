@@ -281,11 +281,74 @@ impl Listener {
     }
 }
 
+/// How loud a speaker's voice comes back at the mic against how loud the game plays it
+/// (`Game::playing_level`), learned while they talk (most of what the mic hears then is them), and
+/// whether the mic hears more than that now: the player, talking over them.
+struct Echo {
+    /// The mic's level over the voice's, lately.
+    ratios: std::collections::VecDeque<f32>,
+    coupling: f32,
+    /// Mic samples in a row louder than the voice coming back.
+    over: usize,
+}
+
+impl Echo {
+    /// Until it's learned, the voice is taken to come back as loud as it's played (the player must
+    /// be louder than that).
+    const GUESS: f32 = 1.0;
+    /// The player is this many times louder at the mic than the voice coming back (6 dB), and at
+    /// least `FLOOR` (-45 dB), for `SUSTAIN` seconds.
+    const MARGIN: f32 = 2.0;
+    const FLOOR: f32 = 0.0056;
+    const SUSTAIN: f32 = 0.1;
+    /// Ratios kept (a mic chunk's each: some seconds), the share of them taken to be the voice
+    /// alone (the player talks over them now and then, not mostly), and how many it needs first.
+    const KEPT: usize = 400;
+    const SHARE: f32 = 0.8;
+    const LEARNED: usize = 50;
+
+    fn new() -> Self {
+        Echo { ratios: std::collections::VecDeque::new(), coupling: Self::GUESS, over: 0 }
+    }
+
+    /// A mic chunk (its RMS, its samples at `rate`) with the voice playing at `playing`: whether
+    /// it's the player, louder than the voice coming back, for long enough.
+    fn player(&mut self, mic: f32, samples: usize, rate: i32, playing: f32) -> bool {
+        if playing > 0.003 {
+            self.ratios.push_back(mic / playing);
+            if self.ratios.len() > Self::KEPT {
+                self.ratios.pop_front();
+            }
+            if self.ratios.len() >= Self::LEARNED {
+                let mut sorted: Vec<f32> = self.ratios.iter().copied().collect();
+                sorted.sort_by(f32::total_cmp);
+                self.coupling = sorted[((sorted.len() - 1) as f32 * Self::SHARE) as usize];
+            }
+        }
+        if mic > (self.coupling * playing * Self::MARGIN).max(Self::FLOOR) {
+            self.over += samples;
+        } else {
+            self.over = 0;
+        }
+        self.over as f32 >= Self::SUSTAIN * rate as f32
+    }
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
 /// Runs forever on the calling thread, sending each finished utterance's text to `out`.
 ///
 /// With barge-in on, the mic stays live while someone talks: as soon as the player starts
-/// speaking, they're cut off (queued audio in the game, pending TTS and the LLM reply). Each time
-/// the player starts talking the game hears of it (`listening`), before the words are known.
+/// speaking, they're cut off (queued audio in the game, pending TTS and the LLM reply). Where the
+/// game says how loud the voice it plays is, speech no louder than that voice coming back through
+/// the player's speakers is theirs, not the player's: it neither cuts them off nor is answered.
+/// Each time the player starts talking the game hears of it (`listening`), before the words are
+/// known.
 pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, game: Arc<dyn Game>, out: Sender<String>) -> Result<()> {
     let host = cpal::default_host();
     let device = microphone(&host, cfg.mic.device.as_deref())?;
@@ -306,8 +369,11 @@ pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, game: Arc<
     let (barge_in, mute_while_speaking) = (cfg.mic.barge_in, cfg.mic.mute_while_speaking);
     let mut listener = Listener::new(cfg, transcriber, mic_rate)?;
     let mut was_talking = false;
+    let mut echo = Echo::new();
+    // (the speech being heard: the player's, or so far only their voice coming back)
+    let mut players = true;
     for chunk in rx {
-        let mate_talking = speaking.is_speaking();
+        let mate_talking = speaking.is_speaking() || game.still_speaking();
         // (muted in the game: nothing heard, and no one's cut off; the listener starts over,
         // without counting the sound as talked over them)
         if game.mic_muted() {
@@ -315,22 +381,42 @@ pub fn run(cfg: Config, transcriber: Transcriber, speaking: Speaking, game: Arc<
             was_talking = false;
             continue;
         }
+        let playing = if barge_in && mate_talking { game.playing_level() } else { None };
+        let player = playing.is_none_or(|p| echo.player(rms(&chunk), chunk.len(), mic_rate, p));
         let heard = listener.feed(chunk, !barge_in && mute_while_speaking && mate_talking);
         let talking = listener.speech_active();
-        if talking && !was_talking {
+        // (the player's from its start, or from when it's louder than their voice coming back:
+        // the one they talk to turns to listen then)
+        let became = if talking && !was_talking {
+            players = player;
+            player
+        } else if talking && !players && player {
+            players = true;
+            true
+        } else {
+            false
+        };
+        if became {
             game.listening();
         }
-        was_talking = talking;
-        if barge_in && mate_talking && talking {
-            println!("[mic] you talked over them, cutting them off");
+        if barge_in && mate_talking && talking && players {
+            println!("[mic] you talked over them, cutting them off (their voice comes back at x{:.2} of its level)", echo.coupling);
             speaking.interrupt();
             game.stop_audio();
         }
-        for text in heard {
-            if out.send(text).is_err() {
-                return Ok(());
+        if !heard.is_empty() && !players {
+            println!("[mic] heard their own voice through your speakers: not answered ({})", heard.join(" "));
+        } else {
+            for text in heard {
+                if out.send(text).is_err() {
+                    return Ok(());
+                }
             }
         }
+        if !talking {
+            players = true;
+        }
+        was_talking = talking;
     }
     Ok(())
 }
