@@ -48,14 +48,6 @@ pub trait Game: Send + Sync {
         false
     }
 
-    /// How loud the speaker's voice the game is playing is now (the loudest of its last half
-    /// second, its RMS, -1 to 1): with it, the mic tells their voice heard back through the
-    /// player's speakers from the player's own, and talking over them works on speakers too. None:
-    /// the game can't tell (any speech while they talk is the player's).
-    fn playing_level(&self) -> Option<f32> {
-        None
-    }
-
     /// The game is still saying a line, after m8 has sent all its voice (it plays it later than
     /// it was made: the game waited on the voice server).
     fn still_speaking(&self) -> bool {
