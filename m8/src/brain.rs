@@ -390,7 +390,13 @@ impl Brain {
                     Some(output) => {
                         let _ = inputs.send(Input::Summary { speaker, memory, folded, text: clean(&output) });
                     }
-                    None => eprintln!("[brain] summary failed: {:#}", reply.err().map(|e| e.to_string()).unwrap_or_default()),
+                    None => eprintln!(
+                        "[brain] summary failed: {}",
+                        match &reply {
+                            Ok(answer) => crate::llm::error_in(answer).unwrap_or_else(|| "no answer in it".to_string()),
+                            Err(e) => format!("{e:#}"),
+                        }
+                    ),
                 }
             });
         }
@@ -821,6 +827,10 @@ impl Brain {
             };
             if model.is_null() {
                 model = chunk["model"].clone();
+            }
+            if let Some(error) = crate::llm::error_in(&chunk) {
+                failed = Some(anyhow::anyhow!(error));
+                break;
             }
             if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
                 if first_token_ms.is_null() {

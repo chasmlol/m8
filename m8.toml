@@ -43,6 +43,14 @@ url = "http://127.0.0.1:8080/v1/systemone"
 #   api_key_env = "DEEPSEEK_API_KEY"
 #   [llm.extra]
 #   thinking = { type = "disabled" }
+# Or OpenRouter (hundreds of hosted models through one key: its preset fills in the URL and
+# OPENROUTER_API_KEY), quickest with the model's thinking off and its fastest host first:
+#   preset = "openrouter"
+#   model = "deepseek/deepseek-v4.1-flash"
+#   reasoning = "none"
+#   [llm.openrouter]
+#   app_title = "m8"
+#   sort = "latency"
 url = "http://127.0.0.1:8081/v1/chat/completions"
 temperature = 1.0
 
